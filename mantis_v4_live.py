@@ -1,5 +1,18 @@
 #!/usr/bin/env python3
-"""MANTIS Phase 8 live observation runner. No order placement."""
+"""MANTIS live observation runner and Phase 9 command center. No order placement.
+
+Layering, top to bottom:
+
+    quant       compute_asset_state()  -- unchanged Phase 5/6 mathematics
+    providers   market data + economics chain
+    state       ForwardEngine -> append-only ForwardStore (unchanged Phase 8)
+    hooks       EventBus (ON_ENTRY_YES ... ON_ERROR)
+    present     mantis_v4.ui: screen, event log, tones, speech
+
+The scanner owns the main thread. Presentation runs on its own daemon threads
+and is wrapped at every boundary, so a render, tone or speech failure degrades
+the interface and never the scan loop.
+"""
 from __future__ import annotations
 import argparse,math,time,uuid
 from datetime import datetime,timezone
@@ -16,48 +29,255 @@ from mantis_v4.economics import (EconomicsProviderChain,ManualEconomicsProvider,
  ProxyEconomicsProvider,WebullEconomicsProvider)
 from mantis_v4.forward import ForwardConfig,ForwardEngine,ForwardStore,LiveAssetState,ReferenceStatus
 from mantis_v4.forward.console import render_snapshot
+from mantis_v4.forward.events import AppEvent,EventBus,EventType
 UTC=timezone.utc
 PHASE6_FRAGILITY_SCALES={"gamma":7.537633538712959,"vega":0.013047089075600496,"theta":0.004530053560656391,"vol_of_vol":0.3016632827895451}
 
-def main():
- ap=argparse.ArgumentParser(description="MANTIS Phase 8 observation-only runner")
+# ---------------------------------------------------------------------------
+# Quantitative core. Unchanged from Phase 8; extracted only so the runner's
+# presentation wiring cannot be confused with its mathematics.
+# ---------------------------------------------------------------------------
+
+def compute_asset_state(*,asset,bars,latency,instant,window,cfg,crossings,last_side,economics,market):
+ """Return a LiveAssetState, or None when the asset has no causal data yet."""
+ frame=bars.frame; visible=frame[frame.index<instant.utc]
+ opening=visible[visible.index>=window.start_utc]
+ if opening.empty: return None,None
+ reference=float(opening.iloc[0]["Open"]); spot=float(visible.iloc[-1]["Close"]); key=(window.contract_id,asset); side=spot>=reference
+ if key in last_side and side!=last_side[key]: crossings[key]=crossings.get(key,0)+1
+ last_side[key]=side; ind=precompute_indicators(visible); sigma1=float(ind.realized_vol_1m.iloc[-1]); seconds=window.seconds_remaining(instant); sigma_rem=sigma1*math.sqrt(max(seconds/60,1e-12)); buffer_pct=(spot-reference)/reference
+ anchor=gaussian_terminal(np.array([buffer_pct]),np.array([sigma_rem]),spot=np.array([spot]),reference=np.array([reference])); heavy=student_t_terminal(np.array([buffer_pct]),np.array([sigma_rem]),nu=4.456245976114701,spot=np.array([spot])); channels={"gaussian":anchor.p_yes,"student_t":heavy.p_yes}; agreement=combine_channels(channels); lower=conservative_lower_bound(channels)
+ sens=digital_sensitivities(spot=np.array([spot]),reference=np.array([reference]),seconds_remaining=np.array([seconds]),sigma_1m=np.array([sigma1])); scaled=scaled_sensitivities(sens,np.array([spot]),np.array([sigma1])); returns=np.diff(np.log(visible["Close"].astype(float).to_numpy())); rv5=float(np.std(returns[-5:],ddof=1)) if len(returns)>=5 else sigma1; rv30=float(np.std(returns[-30:],ddof=1)) if len(returns)>=30 else sigma1; vov=np.array([abs(math.log(rv5/rv30)) if rv5>0 and rv30>0 else 0.]); frag=compute_fragility(gamma_per_pct2=scaled["gamma_per_pct2"],vega_per_10pct_vol=scaled["vega_per_10pct_vol"],theta_per_30s=scaled["theta_per_30s"],abs_z=np.abs(sens.z),seconds_remaining=np.array([seconds]),crossings=np.array([crossings.get(key,0)]),vol_of_vol=vov,disagreement=agreement.disagreement,scales=PHASE6_FRAGILITY_SCALES)
+ age=max(0.,(instant.utc-(bars.last_timestamp)).total_seconds()-60) if bars.last_timestamp else float("inf"); econ=economics.get_economics(asset,window.contract_id,instant.utc)
+ state=LiveAssetState(asset,window.contract_id,window.start_utc,window.end_utc,instant.utc,reference,ReferenceStatus.PROXY,spot,sigma_rem,float(anchor.p_yes[0]),float(lower[0]),float(frag.score[0]),float(agreement.disagreement[0]),float(anchor.p_cross_reference[0]),crossings.get(key,0),age,latency,provider_mode=economics.last_provider or "proxy",economics=econ,quality_ok=np.isfinite(sigma1) and sigma1>0,quality_reason=market.health.display)
+ return state,visible
+
+# ---------------------------------------------------------------------------
+# Command line
+# ---------------------------------------------------------------------------
+
+def build_parser():
+ ap=argparse.ArgumentParser(description="MANTIS observation-only runner and command center")
  ap.add_argument("--once",action="store_true",help="perform one scan and exit")
- ap.add_argument("--forward-dir",default="data/forward"); ap.add_argument("--manual-economics",default="config/contracts/live_economics.json")
- args=ap.parse_args(); root=Path(__file__).resolve().parent; cfg=MantisConfig.load(); clock=Clock(); tz=load_timezone(cfg.contract_timezone)
- store=ForwardStore(root/args.forward_dir); engine=ForwardEngine(store,ForwardConfig(cfg.scan_interval_seconds,cfg.max_data_age_seconds,cfg.contract_timezone),repo=root)
+ ap.add_argument("--forward-dir",default="data/forward")
+ ap.add_argument("--manual-economics",default="config/contracts/live_economics.json")
+ ui=ap.add_argument_group("presentation")
+ ui.add_argument("--no-ui",action="store_true",help="plain console output instead of the command center")
+ ui.add_argument("--no-audio",action="store_true",help="disable alert tones")
+ ui.add_argument("--no-voice",action="store_true",help="disable spoken announcements")
+ ui.add_argument("--no-startup",action="store_true",help="skip the initialization sequence")
+ ui.add_argument("--diagnostics",action="store_true",help="show the advanced diagnostics panel")
+ ui.add_argument("--focus",default=None,metavar="ASSET",help="asset shown in the primary decision area by default")
+ modes=ap.add_argument_group("safe modes (never write forward records)")
+ modes.add_argument("--test-alerts",action="store_true",help="preview every alert tone and announcement, then exit")
+ modes.add_argument("--demo",action="store_true",help="run the interface on synthetic states, clearly labelled")
+ return ap
+
+# ---------------------------------------------------------------------------
+# Safe modes
+# ---------------------------------------------------------------------------
+
+def run_test_alerts(ui_config):
+ """Preview alerts. Constructs no store, no engine, and no asset state."""
+ from mantis_v4.ui import build_audio,build_voice,run_test_alerts as preview
+ audio=build_audio(ui_config); voice=build_voice(ui_config)
+ try: preview(audio,voice,ui_config)
+ finally: audio.stop(); voice.stop()
+ return 0
+
+def run_demo(ui_config,cfg,args):
+ """Synthetic command center. Structurally cannot reach the forward logs."""
+ from mantis_v4.ui import AlertRouter,CommandCenter,CommandCenterState,build_audio,build_voice
+ from mantis_v4.ui.demo import DemoFeed,DEMO_FORWARD_REPORT,DEMO_HISTORICAL,emit_demo_events
+ ui_config.demo_mode=True
+ assets=cfg.active_assets; state=CommandCenterState(assets,ui_config)
+ state.set_status(demo_mode=True,run_id="DEMO",software_version="DEMO",model_version="DEMO_NORMAL_Z",
+  policy_name="H_p0.95_l0.90_f50_d.05_t300",underlying_provider="synthetic",underlying_state="LIVE",
+  webull_status="AUTH_NOT_CONFIGURED",economics_status="DISABLED",audio_enabled=ui_config.audio_enabled,
+  voice_enabled=ui_config.voice_enabled,latency_seconds=0.0)
+ state.set_forward(DEMO_FORWARD_REPORT,DEMO_HISTORICAL)
+ audio=build_audio(ui_config); voice=build_voice(ui_config); bus=EventBus()
+ AlertRouter(state,audio,voice,ui_config).attach(bus)
+ center=CommandCenter(state,ui_config,local_timezone=cfg.contract_timezone)
+ feed=DemoFeed(assets)
+ if not args.once: center.start()
+ try:
+  while True:
+   snapshots=feed.snapshots()
+   for snapshot in snapshots: state.update_from_snapshot(snapshot,synthetic=True)
+   emit_demo_events(bus,snapshots)
+   state.record_scan()
+   if args.once: break
+   time.sleep(cfg.scan_interval_seconds)
+ except KeyboardInterrupt: pass
+ finally:
+  if args.once: center.render_once()
+  center.stop(); audio.stop(); voice.stop()
+ return 0
+
+# ---------------------------------------------------------------------------
+# Live runner
+# ---------------------------------------------------------------------------
+
+def main():
+ args=build_parser().parse_args(); root=Path(__file__).resolve().parent
+ from mantis_v4.ui import (AlertRouter,CommandCenter,CommandCenterState,PresentationConfig,
+  Severity,build_audio,build_console,build_voice)
+ from mantis_v4.ui import errors as ui_errors, startup as ui_startup
+ ui_config=PresentationConfig.load().apply_cli(args)
+ if args.test_alerts: return run_test_alerts(ui_config)
+ cfg=MantisConfig.load()
+ if not cfg.voice_enabled: ui_config.voice_enabled=False
+ if args.demo: return run_demo(ui_config,cfg,args)
+
+ clock=Clock(); tz=load_timezone(cfg.contract_timezone)
+ store=ForwardStore(root/args.forward_dir); bus=EventBus()
+ engine=ForwardEngine(store,ForwardConfig(cfg.scan_interval_seconds,cfg.max_data_age_seconds,cfg.contract_timezone),events=bus,repo=root)
  market=YFinanceMarketDataProvider(interval=cfg.bar_interval,bootstrap_period=cfg.bootstrap_period,refresh_period=cfg.refresh_period,min_candles=cfg.min_candles,max_cache_rows=cfg.max_cache_rows,timeout_seconds=cfg.network_timeout_seconds,max_retries=cfg.max_retries,backoff_seconds=cfg.retry_backoff_seconds)
- economics=EconomicsProviderChain([WebullEconomicsProvider(cfg.credentials),ManualEconomicsProvider(root/args.manual_economics),ProxyEconomicsProvider()])
+ webull=WebullEconomicsProvider(cfg.credentials); manual=ManualEconomicsProvider(root/args.manual_economics)
+ economics=EconomicsProviderChain([webull,manual,ProxyEconomicsProvider()])
  # Rebuild crossing state from immutable observations after restart.
  crossings={}; last_side={}
  for o in store.read("observations"):
   key=(o.get("contract_id"),o.get("asset")); crossings[key]=max(crossings.get(key,0),int(o.get("reference_crossings",0))); last_side[key]=float(o.get("buffer",0))>=0
- print("MODE: OBSERVATION_ONLY | NO AUTOMATED EXECUTION")
- print("WEBULL_STATUS = "+WebullEconomicsProvider(cfg.credentials).status)
- while True:
-  instant=clock.capture(); window=ContractWindow.for_instant(instant,tz,cfg.contract_window_minutes)
-  for asset in cfg.active_assets:
-   started=time.monotonic(); bars=market.get_bars(asset,instant); latency=time.monotonic()-started
-   if bars is None or bars.is_empty: continue
-   frame=bars.frame; visible=frame[frame.index<instant.utc]
-   opening=visible[visible.index>=window.start_utc]
-   if opening.empty: continue
-   reference=float(opening.iloc[0]["Open"]); spot=float(visible.iloc[-1]["Close"]); key=(window.contract_id,asset); side=spot>=reference
-   if key in last_side and side!=last_side[key]: crossings[key]=crossings.get(key,0)+1
-   last_side[key]=side; ind=precompute_indicators(visible); sigma1=float(ind.realized_vol_1m.iloc[-1]); seconds=window.seconds_remaining(instant); sigma_rem=sigma1*math.sqrt(max(seconds/60,1e-12)); buffer_pct=(spot-reference)/reference
-   anchor=gaussian_terminal(np.array([buffer_pct]),np.array([sigma_rem]),spot=np.array([spot]),reference=np.array([reference])); heavy=student_t_terminal(np.array([buffer_pct]),np.array([sigma_rem]),nu=4.456245976114701,spot=np.array([spot])); channels={"gaussian":anchor.p_yes,"student_t":heavy.p_yes}; agreement=combine_channels(channels); lower=conservative_lower_bound(channels)
-   sens=digital_sensitivities(spot=np.array([spot]),reference=np.array([reference]),seconds_remaining=np.array([seconds]),sigma_1m=np.array([sigma1])); scaled=scaled_sensitivities(sens,np.array([spot]),np.array([sigma1])); returns=np.diff(np.log(visible["Close"].astype(float).to_numpy())); rv5=float(np.std(returns[-5:],ddof=1)) if len(returns)>=5 else sigma1; rv30=float(np.std(returns[-30:],ddof=1)) if len(returns)>=30 else sigma1; vov=np.array([abs(math.log(rv5/rv30)) if rv5>0 and rv30>0 else 0.]); frag=compute_fragility(gamma_per_pct2=scaled["gamma_per_pct2"],vega_per_10pct_vol=scaled["vega_per_10pct_vol"],theta_per_30s=scaled["theta_per_30s"],abs_z=np.abs(sens.z),seconds_remaining=np.array([seconds]),crossings=np.array([crossings.get(key,0)]),vol_of_vol=vov,disagreement=agreement.disagreement,scales=PHASE6_FRAGILITY_SCALES)
-   age=max(0.,(instant.utc-(bars.last_timestamp)).total_seconds()-60) if bars.last_timestamp else float("inf"); econ=economics.get_economics(asset,window.contract_id,instant.utc)
-   state=LiveAssetState(asset,window.contract_id,window.start_utc,window.end_utc,instant.utc,reference,ReferenceStatus.PROXY,spot,sigma_rem,float(anchor.p_yes[0]),float(lower[0]),float(frag.score[0]),float(agreement.disagreement[0]),float(anchor.p_cross_reference[0]),crossings.get(key,0),age,latency,provider_mode=economics.last_provider or "proxy",economics=econ,quality_ok=np.isfinite(sigma1) and sigma1>0,quality_reason=market.health.display)
-   snap=engine.process(state); print(render_snapshot(snap)); print("-"*78)
-   for pending in [x for x in store.unresolved_entries() if x.get("asset")==asset]:
-    observations=[o for o in store.read("observations") if o.get("contract_id")==pending["contract_id"] and o.get("asset")==asset]
-    if not observations: continue
-    end=datetime.fromisoformat(observations[0]["window_end"])
-    if end>instant.utc: continue
-    terminal_rows=visible[visible.index>=end]
-    if terminal_rows.empty: continue
-    engine.resolve(asset=asset,contract_id=pending["contract_id"],resolution_timestamp=end,terminal_value=float(terminal_rows.iloc[0]["Open"]),reference=float(pending["reference"]),resolution_source="PROXY_UNDERLYING",verified=False)
-  store.append("provider_health",{"health_id":str(uuid.uuid4()),"timestamp_utc":instant.utc.isoformat(),"provider":"yahoo","state":market.health.state.value,"detail":market.health.detail,"successful_fetches":market.health.total_requests-market.health.total_failures,"failed_fetches":market.health.total_failures},"health_id")
-  if args.once: break
-  elapsed=clock.monotonic()-instant.monotonic; clock.sleep(max(0,cfg.scan_interval_seconds-elapsed))
-if __name__=="__main__": main()
+
+ # -- presentation -----------------------------------------------------------
+ state=CommandCenterState(cfg.active_assets,ui_config)
+ audio=build_audio(ui_config); voice=build_voice(ui_config)
+ router=AlertRouter(state,audio,voice,ui_config).attach(bus)
+ state.set_status(run_id=engine.run_id,software_version=engine.config.software_version,
+  model_version=engine.config.model_version,policy_name=engine.policy.classification.name,
+  git_commit=engine.git_commit,config_hash=engine.config_hash,started_at=datetime.now(UTC),
+  local_timezone=cfg.contract_timezone,underlying_provider="yahoo",
+  webull_status=webull.status,economics_provider="underlying-proxy",
+  economics_status="ACTIVE" if manual.status=="AVAILABLE" else "DISABLED",
+  audio_enabled=ui_config.audio_enabled,voice_enabled=ui_config.voice_enabled)
+
+ console=build_console(ui_config); graphical=ui_config.ui_enabled and not args.no_ui
+ if ui_config.startup_animation:
+  checks=ui_startup.build_checks(model_version=engine.config.model_version,
+   policy_name=engine.policy.classification.name,provider_state="READY",
+   webull_status=webull.status,economics_status="ACTIVE" if manual.status=="AVAILABLE" else "DISABLED",
+   forward_dir=str(Path(args.forward_dir)),clock_ok=True,audio_status=audio.status.detail or audio.status.backend,
+   voice_status=voice.status.detail,demo_mode=False)
+  if graphical: ui_startup.run(console,checks,animate=True)
+  else:
+   for line in ui_startup.plain_lines(checks): print(line)
+
+ center=None
+ if graphical:
+  center=CommandCenter(state,ui_config,console=console,local_timezone=cfg.contract_timezone)
+  # A single scan prints one frame instead of taking over the screen.
+  if not args.once: center.start()
+ else:
+  print("MODE: OBSERVATION_ONLY | NO AUTOMATED EXECUTION")
+  print("WEBULL_STATUS = "+webull.status)
+
+ reporter=_start_forward_reporter(store,state,ui_config)
+ state.log(Severity.INFO.value,"SYSTEM","MANTIS ONLINE",f"run {engine.run_id[:8]}")
+
+ def report_error(exc,*,component,provider="n/a",recovery="retrying / degraded mode"):
+  """One place converts an exception into an ON_ERROR hook plus a log entry."""
+  error=ui_errors.describe(exc,provider=provider,component=component,recovery=recovery)
+  ui_errors.write_diagnostic(error,ui_config.diagnostic_log_path())
+  state.set_error(error)
+  try: bus.emit(AppEvent(EventType.ERROR,error.timestamp.isoformat(),
+   {"component":component,"provider":provider,"message":error.message,"recovery":recovery}))
+  except Exception: pass
+
+ try:
+  while True:
+   instant=clock.capture(); window=ContractWindow.for_instant(instant,tz,cfg.contract_window_minutes)
+   for asset in cfg.active_assets:
+    try:
+     started=time.monotonic(); bars=market.get_bars(asset,instant); latency=time.monotonic()-started
+     if bars is None or bars.is_empty:
+      _hold(state,bus,asset,instant,"UNDERLYING_DATA_UNAVAILABLE"); continue
+     state_obj,visible=compute_asset_state(asset=asset,bars=bars,latency=latency,instant=instant,
+      window=window,cfg=cfg,crossings=crossings,last_side=last_side,economics=economics,market=market)
+     if state_obj is None:
+      _hold(state,bus,asset,instant,"AWAITING_FIRST_SCAN"); continue
+     snap=engine.process(state_obj)
+     _present(state,center,snap,latency)
+     for pending in [x for x in store.unresolved_entries() if x.get("asset")==asset]:
+      observations=[o for o in store.read("observations") if o.get("contract_id")==pending["contract_id"] and o.get("asset")==asset]
+      if not observations: continue
+      end=datetime.fromisoformat(observations[0]["window_end"])
+      if end>instant.utc: continue
+      terminal_rows=visible[visible.index>=end]
+      if terminal_rows.empty: continue
+      engine.resolve(asset=asset,contract_id=pending["contract_id"],resolution_timestamp=end,terminal_value=float(terminal_rows.iloc[0]["Open"]),reference=float(pending["reference"]),resolution_source="PROXY_UNDERLYING",verified=False)
+    except Exception as exc:
+     # One asset's failure never ends the scan or the run.
+     report_error(exc,component=f"scan {asset}",provider="yahoo")
+     _hold(state,bus,asset,instant,"UNDERLYING_DATA_UNAVAILABLE")
+   store.append("provider_health",{"health_id":str(uuid.uuid4()),"timestamp_utc":instant.utc.isoformat(),"provider":"yahoo","state":market.health.state.value,"detail":market.health.detail,"successful_fetches":market.health.total_requests-market.health.total_failures,"failed_fetches":market.health.total_failures},"health_id")
+   _sync_health(state,router,market,instant)
+   if args.once: break
+   elapsed=clock.monotonic()-instant.monotonic; clock.sleep(max(0,cfg.scan_interval_seconds-elapsed))
+ except KeyboardInterrupt:
+  state.log(Severity.NOTICE.value,"SYSTEM","SHUTDOWN REQUESTED","forward records intact")
+ finally:
+  if reporter is not None: reporter.set()
+  if center is not None:
+   if args.once: center.render_once()
+   center.stop()
+  audio.stop(); voice.stop()
+  if center is not None and center.disabled_reason:
+   print(f"INTERFACE DISABLED: {center.disabled_reason}")
+  print("MANTIS STOPPED | forward records are append-only and intact")
+ return 0
+
+# ---------------------------------------------------------------------------
+# Presentation helpers. Each one is failure-isolated from the scan loop.
+# ---------------------------------------------------------------------------
+
+def _present(state,center,snap,latency):
+ try:
+  state.update_from_snapshot(snap)
+  state.record_scan(latency_seconds=latency,last_scan_utc=datetime.now(UTC),
+   reference_status=snap.reference_status,quote_status=snap.quote_status,
+   economics_status="ACTIVE" if snap.ev_status not in ("ECONOMICS_UNAVAILABLE","UNAVAILABLE") else "DISABLED")
+ except Exception:
+  pass
+ if center is None:
+  try: print(render_snapshot(snap)); print("-"*78)
+  except Exception: pass
+
+def _hold(state,bus,asset,instant,reason):
+ """Show a hold for an asset the engine could not evaluate. Writes nothing."""
+ try: state.mark_no_data(asset,reason)
+ except Exception: pass
+ try: bus.emit(AppEvent(EventType.DATA_HOLD,instant.utc.isoformat(),{"asset":asset,"reason":reason}))
+ except Exception: pass
+
+def _sync_health(state,router,market,instant):
+ try:
+  health=market.health
+  state.set_status(underlying_state=health.state.value,underlying_detail=health.detail,
+   underlying_last_success=health.last_success_utc,
+   underlying_successes=health.total_requests-health.total_failures,
+   underlying_failures=health.total_failures)
+  if not health.state.is_usable and health.detail:
+   router.provider_failure("yahoo",health.detail)
+ except Exception:
+  pass
+
+def _start_forward_reporter(store,state,ui_config):
+ """Recompute the forward-validation summary off the scan thread."""
+ if not ui_config.show_forward_validation: return None
+ import threading
+ from mantis_v4.forward import compare_historical,forward_report
+ stop=threading.Event()
+ def worker():
+  while not stop.is_set():
+   try:
+    report=forward_report(store,n_boot=200)
+    state.set_forward(report,compare_historical(report,store.read("observations")))
+   except Exception:
+    pass
+   stop.wait(max(15.0,ui_config.forward_report_interval_seconds))
+ threading.Thread(target=worker,name="MANTIS-Forward",daemon=True).start()
+ return stop
+
+if __name__=="__main__": raise SystemExit(main())

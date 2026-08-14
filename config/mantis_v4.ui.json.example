@@ -1,0 +1,39 @@
+{
+  "_comment": "Copy to config/mantis_v4.ui.json and keep only the keys you want to change; the values below are the defaults. Keys starting with an underscore are ignored, but any OTHER unrecognised key is a startup error rather than a silently ignored setting. Every key also has an environment variable: the name in capitals with MANTIS_UI_ in front. Precedence, later wins: defaults -> this file -> environment -> command-line flags. Nothing here can affect a decision; these are presentation settings only.",
+
+  "ui_enabled": true,
+  "ui_refresh_rate": 4.0,
+  "startup_animation": true,
+  "show_advanced_diagnostics": false,
+  "default_focused_asset": "BTC-USD",
+  "event_log_length": 200,
+  "event_log_visible_rows": 8,
+  "minimum_terminal_width": 96,
+  "minimum_terminal_height": 30,
+  "show_forward_validation": true,
+  "forward_report_interval_seconds": 60.0,
+
+  "audio_enabled": true,
+  "master_volume": 0.7,
+  "audio_enter_yes": true,
+  "audio_enter_no": true,
+  "audio_wait": false,
+  "audio_data_hold": true,
+  "audio_rollover": true,
+  "audio_resolution": true,
+  "audio_error": true,
+  "audio_min_interval_seconds": 15.0,
+
+  "voice_enabled": true,
+  "voice_rate": 1,
+  "voice_volume": 90,
+  "voice_enter": true,
+  "voice_data_hold": true,
+  "voice_rollover": false,
+  "voice_resolution": true,
+  "voice_error": true,
+  "voice_min_interval_seconds": 30.0,
+
+  "diagnostic_log": "data/logs/mantis_ui_diagnostics.log",
+  "developer_mode": false
+}

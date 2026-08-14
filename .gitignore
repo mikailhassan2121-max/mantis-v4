@@ -226,6 +226,9 @@ config/mantis_v4.local.json
 config/*.local.json
 .env.mantis
 
+# Per-operator Phase 9 presentation settings (never secrets, but machine-specific).
+config/mantis_v4.ui.json
+
 # User-supplied contract specifications (may contain account-specific data).
 config/contracts/*.json
 config/contracts/*.csv
