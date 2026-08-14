@@ -128,21 +128,23 @@ def compute_fragility(
     vol_of_vol: Optional[np.ndarray] = None,
     disagreement: Optional[np.ndarray] = None,
     weights: Optional[dict[str, float]] = None,
+    scales: Optional[dict[str, float]] = None,
 ) -> FragilityScore:
     """Combine the components into a 0-100 fragility score."""
     weights = dict(weights or DEFAULT_WEIGHTS)
+    scales = dict(scales or {})
 
     n = len(np.asarray(abs_z, dtype="float64"))
     components: dict[str, np.ndarray] = {}
 
     components["gamma"] = _squash(
-        gamma_per_pct2, _robust_scale(gamma_per_pct2, 0.05)
+        gamma_per_pct2, scales.get("gamma", _robust_scale(gamma_per_pct2, 0.05))
     )
     components["vega"] = _squash(
-        vega_per_10pct_vol, _robust_scale(vega_per_10pct_vol, 0.02)
+        vega_per_10pct_vol, scales.get("vega", _robust_scale(vega_per_10pct_vol, 0.02))
     )
     components["theta"] = _squash(
-        theta_per_30s, _robust_scale(theta_per_30s, 0.01)
+        theta_per_30s, scales.get("theta", _robust_scale(theta_per_30s, 0.01))
     )
 
     # Proximity: |z| small means the outcome is close to a coin flip and a
@@ -163,7 +165,7 @@ def compute_fragility(
 
     if vol_of_vol is not None:
         components["vol_of_vol"] = _squash(
-            vol_of_vol, _robust_scale(vol_of_vol, 0.3)
+            vol_of_vol, scales.get("vol_of_vol", _robust_scale(vol_of_vol, 0.3))
         )
     else:
         components["vol_of_vol"] = np.zeros(n, dtype="float64")
