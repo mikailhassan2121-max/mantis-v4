@@ -45,6 +45,7 @@ from mantis_v4.models import (                                        # noqa: E4
     ModellingDatasetBuilder,
     assess,
     clustered_accuracy,
+    clustered_metric,
     drop_incomplete,
     grouped_walk_forward,
     paired_bootstrap_difference,
@@ -106,6 +107,93 @@ def banner():
     for line in LIMITS:
         print(f"  {line}")
     print(SEP)
+
+
+def quantiles(values, qs=(0.05, 0.50, 0.95)) -> dict[str, float]:
+    """Finite-only quantiles for compact, JSON-safe diagnostics."""
+    values = np.asarray(values, dtype="float64")
+    values = values[np.isfinite(values)]
+    if not len(values):
+        return {f"q{int(q * 100):02d}": float("nan") for q in qs}
+    return {f"q{int(q * 100):02d}": float(np.quantile(values, q)) for q in qs}
+
+
+def write_markdown_report(path: Path, summary: dict) -> None:
+    """Write the final human-readable Phase 5 report from the JSON results."""
+    lines = [
+        "# MANTIS — PHASE 5 RESULTS",
+        "",
+        "```",
+        "PROXY SETTLEMENT REFERENCE",
+        "NO HISTORICAL WEBULL CONTRACT QUOTES",
+        "CLASSIFICATION RESEARCH ONLY",
+        "NOT A PROFITABILITY BACKTEST",
+        "LIMITED RECENT HISTORICAL REGIME",
+        "```",
+        "",
+        "## Headline",
+        "",
+        summary["conclusion"],
+        "",
+        "The chronological holdout remained sealed and was not used for Phase 5 tuning.",
+        "NO TRADE remains an abstention, not an incorrect prediction.",
+        "",
+        "## Model results",
+        "",
+        "| Model | n | Brier | Log loss | Slope | ECE | Accuracy | Clustered 95% CI |",
+        "|---|---:|---:|---:|---:|---:|---:|---|",
+    ]
+    for name, row in summary.get("models", {}).items():
+        lines.append(
+            f"| {name} | {row['n']} | {row['brier']:.5f} | {row['logloss']:.5f} | "
+            f"{row['calibration_slope']:.3f} | {row['ece']:.4f} | {row['accuracy']:.2%} | "
+            f"[{row['ci_low']:.2%}, {row['ci_high']:.2%}] |"
+        )
+    lines += ["", "### Paired Brier comparisons against Normal-Z", "",
+              "| Challenger | n | ΔBrier | Clustered 95% CI | Verdict |",
+              "|---|---:|---:|---|---|"]
+    for name, row in summary.get("vs_normal_z", {}).items():
+        lines.append(
+            f"| {name} | {row['n']} | {row['delta_brier']:+.6f} | "
+            f"[{row['ci'][0]:+.6f}, {row['ci'][1]:+.6f}] | {row['verdict']} |"
+        )
+    lines += [
+        "",
+        "## Monte Carlo, terminal distributions, and uncertainty",
+        "",
+        f"Monte Carlo configuration/results: `{json.dumps(summary.get('monte_carlo', {}), default=str)}`",
+        "",
+        f"Student-t terminal diagnostics: `{json.dumps(summary.get('student_t_terminal', {}), default=str)}`",
+        "",
+        f"Conservative-bound slices: `{json.dumps(summary.get('conservative_bounds', {}), default=str)}`",
+        "",
+        "## Heavy tails and volatility",
+        "",
+        f"Normality verdict: **{summary.get('normality', {}).get('verdict', 'N/A')}**",
+        "",
+        f"Student-t fit: `{json.dumps(summary.get('student_t_fit', {}), default=str)}`",
+        "",
+        "Volatility estimators and paired comparisons are recorded in the JSON output under "
+        "`volatility` and `volatility_vs_validated`.",
+        "",
+        "## Fragility, disagreement, and dependence",
+        "",
+        f"Fragility results: `{json.dumps(summary.get('fragility', {}), default=str)}`",
+        "",
+        f"Disagreement study: `{json.dumps(summary.get('agreement', {}).get('study', {}), default=str)}`",
+        "",
+        f"Cross-asset dependence: `{json.dumps(summary.get('cross_asset_dependence', {}), default=str)}`",
+        "",
+        "## Components that survive into Phase 6",
+        "",
+    ]
+    for item in summary.get("survival_recommendations", []):
+        lines.append(f"- {item}")
+    lines += ["", "## Limitations", ""]
+    for item in summary.get("detailed_limitations", []):
+        lines.append(f"- {item}")
+    lines += ["", "Phase 5 stops here. Phase 6 requires explicit approval.", ""]
+    path.write_text("\n".join(lines), encoding="utf-8")
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -271,6 +359,56 @@ def main(argv: Optional[list[str]] = None) -> int:
     print(f"  monte carlo                      n={mc_n} of {n_eval}"
           f"  ({args.mc_paths} paths, empirical innovations)")
 
+    # Distribution/path diagnostics are the reason to retain Monte Carlo;
+    # reproducing Phi(z) alone would not justify simulation expense.
+    mc_terminal = {
+        "n": int(mc_n), "paths": int(args.mc_paths),
+        "probability_standard_error": quantiles(mc.standard_error, (0.05, 0.50, 0.95, 1.0)),
+        "p_cross_reference": quantiles(mc.p_cross_reference),
+        "gaussian_p_cross_reference": quantiles(anchor.p_cross_reference[mc_rows]),
+        "crossing_difference_mc_minus_gaussian": quantiles(
+            mc.p_cross_reference - anchor.p_cross_reference[mc_rows]
+        ),
+        "q05_terminal_return": quantiles(mc.quantile_05 / spot[mc_rows] - 1.0),
+        "q50_terminal_return": quantiles(mc.quantile_50 / spot[mc_rows] - 1.0),
+        "q95_terminal_return": quantiles(mc.quantile_95 / spot[mc_rows] - 1.0),
+        "expected_terminal_buffer": quantiles(mc.expected_terminal_buffer),
+    }
+    print("\n  MONTE CARLO PATH / TAIL DIAGNOSTICS")
+    print(f"    probability SE median={pct(mc_terminal['probability_standard_error']['q50'],3)}"
+          f"  95th={pct(mc_terminal['probability_standard_error']['q95'],3)}"
+          f"  max={pct(mc_terminal['probability_standard_error']['q100'],3)}")
+    print(f"    crossing p median: MC={pct(mc_terminal['p_cross_reference']['q50'],2)}"
+          f"  Gaussian={pct(mc_terminal['gaussian_p_cross_reference']['q50'],2)}")
+    print(f"    MC-Gaussian crossing difference median="
+          f"{pct(mc_terminal['crossing_difference_mc_minus_gaussian']['q50'],2)}")
+    print("\n    terminal-return tail table (distribution across evaluated states)")
+    print(f"    {'quantity':<24}{'5th':>11}{'median':>11}{'95th':>11}")
+    print("    " + "-" * 57)
+    for label, key in (("path 5% quantile", "q05_terminal_return"),
+                       ("path median", "q50_terminal_return"),
+                       ("path 95% quantile", "q95_terminal_return"),
+                       ("expected terminal buffer", "expected_terminal_buffer")):
+        row = mc_terminal[key]
+        print(f"    {label:<24}{pct(row['q05'],3):>11}{pct(row['q50'],3):>11}"
+              f"{pct(row['q95'],3):>11}")
+    summary["monte_carlo"] = mc_terminal
+
+    student_terminal = {
+        "nu": float(nu), "n": int(len(t_est.p_yes)),
+        "q05_terminal_return": quantiles(t_est.quantile_05 / spot - 1.0),
+        "q50_terminal_return": quantiles(t_est.quantile_50 / spot - 1.0),
+        "q95_terminal_return": quantiles(t_est.quantile_95 / spot - 1.0),
+    }
+    print("\n  STUDENT-T TERMINAL QUANTILES")
+    for label, key in (("5% terminal quantile", "q05_terminal_return"),
+                       ("median terminal", "q50_terminal_return"),
+                       ("95% terminal quantile", "q95_terminal_return")):
+        row = student_terminal[key]
+        print(f"    {label:<24} state median={pct(row['q50'],3)}"
+              f"  state 5-95%=[{pct(row['q05'],3)}, {pct(row['q95'],3)}]")
+    summary["student_t_terminal"] = student_terminal
+
     # ------------------------------------------------- model comparison
     print("\n[4/9] CHALLENGERS vs NORMAL-Z (walk-forward evaluation rows)\n")
     print(f"  {'channel':<16}{'n':>8}{'brier':>9}{'logloss':>10}{'slope':>8}"
@@ -319,9 +457,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     sens = digital_sensitivities(spot=spot, reference=reference,
                                  seconds_remaining=seconds, sigma_1m=sigma_1m)
     scaled = scaled_sensitivities(sens, spot, sigma_1m)
-    print(f"  {'bucket':<12}{'|delta|/1%':>13}{'|gamma|/1%^2':>15}"
+    print(f"  {'bucket':<12}{'mean d2':>10}{'|d2|':>10}{'|delta|/1%':>13}{'|gamma|/1%^2':>15}"
           f"{'|vega|/10%vol':>15}{'|theta|/30s':>13}")
-    print("  " + "-" * 68)
+    print("  " + "-" * 88)
     buckets = bucket_by_entry_time(seconds)
     sens_rows = {}
     for name, _, _ in ENTRY_TIME_BUCKETS:
@@ -330,13 +468,16 @@ def main(argv: Optional[list[str]] = None) -> int:
             continue
         row = {
             "n": int(m.sum()),
+            "mean_d2": float(np.mean(sens.d2[m])),
+            "mean_abs_d2": float(np.mean(np.abs(sens.d2[m]))),
             "abs_delta_per_pct": float(np.mean(np.abs(scaled["delta_per_pct"][m]))),
             "abs_gamma_per_pct2": float(np.mean(np.abs(scaled["gamma_per_pct2"][m]))),
             "abs_vega_per_10pct": float(np.mean(np.abs(scaled["vega_per_10pct_vol"][m]))),
             "abs_theta_per_30s": float(np.mean(np.abs(scaled["theta_per_30s"][m]))),
         }
         sens_rows[name] = row
-        print(f"  {name:<12}{row['abs_delta_per_pct']:>13.4f}"
+        print(f"  {name:<12}{row['mean_d2']:>10.3f}{row['mean_abs_d2']:>10.3f}"
+              f"{row['abs_delta_per_pct']:>13.4f}"
               f"{row['abs_gamma_per_pct2']:>15.4f}{row['abs_vega_per_10pct']:>15.4f}"
               f"{row['abs_theta_per_30s']:>13.4f}")
     summary["sensitivities"] = sens_rows
@@ -370,10 +511,14 @@ def main(argv: Optional[list[str]] = None) -> int:
         print(f"\n    {'quantile':>9}{'range':>22}{'n':>8}{'accuracy':>10}{'clustered 95% CI':>22}")
         print("    " + "-" * 69)
         for b in study["buckets"]:
+            disagreement_range = (
+                f"[{f(b['disagreement_low'],4)}, {f(b['disagreement_high'],4)}]"
+            )
+            accuracy_ci = f"[{pct(b['ci_low'],2)}, {pct(b['ci_high'],2)}]"
             print(f"    {b['quantile']:>9}"
-                  f"{f'[{f(b[chr(100)+chr(105)+chr(115)+chr(97)+chr(103)+chr(114)+chr(101)+chr(101)+chr(109)+chr(101)+chr(110)+chr(116)+chr(95)+chr(108)+chr(111)+chr(119)],4)}, {f(b[\"disagreement_high\"],4)}]':>22}"
+                  f"{disagreement_range:>22}"
                   f"{b['n']:>8}{pct(b['accuracy'],2):>10}"
-                  f"{f'[{pct(b[\"ci_low\"],2)}, {pct(b[\"ci_high\"],2)}]':>22}")
+                  f"{accuracy_ci:>22}")
         print(f"\n    SEPARATES (non-overlapping CIs): {study['separates']}")
         if study.get("accuracy_drop_low_to_high") is not None:
             print(f"    accuracy drop low->high disagreement: "
@@ -418,6 +563,29 @@ def main(argv: Optional[list[str]] = None) -> int:
               f"{f(rep.brier):>9}")
     summary["fragility"] = {"bands": frag_rows, "summary": frag.summary(),
                             "weights": frag.weights}
+
+    print("\n  CONSERVATIVE PROBABILITY BOUNDS BY SLICE")
+    print(f"  {'slice':<24}{'n':>8}{'point conf':>13}{'lower bound':>13}{'shortfall':>12}")
+    print("  " + "-" * 70)
+    bound_rows = {}
+    bound_slices = []
+    for threshold in (0.80, 0.85, 0.90, 0.95):
+        bound_slices.append((f"confidence>={threshold:.2f}", anchor_conf >= threshold))
+    for band in BANDS:
+        bound_slices.append((f"fragility={band}", frag.band == band))
+    for label, mask in bound_slices:
+        finite = mask & np.isfinite(lower_bound)
+        if finite.sum() < 30:
+            continue
+        point = float(np.mean(anchor_conf[finite]))
+        lower = float(np.mean(lower_bound[finite]))
+        row = {"n": int(finite.sum()), "point_confidence": point,
+               "mean_lower_bound": lower, "mean_shortfall": point - lower,
+               "lower_bound_quantiles": quantiles(lower_bound[finite])}
+        bound_rows[label] = row
+        print(f"  {label:<24}{row['n']:>8}{pct(point,2):>13}{pct(lower,2):>13}"
+              f"{pct(point-lower,2):>12}")
+    summary["conservative_bounds"] = bound_rows
 
     # --------------------------------- selective prediction + fragility
     print("\n[8/9] SELECTIVE PREDICTION: PROBABILITY ALONE vs PROBABILITY + FRAGILITY\n")
@@ -464,6 +632,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     ext_cache = {a: precompute_extended(fr) for a, fr in frames.items()}
     base_cache = {a: precompute_indicators(fr) for a, fr in frames.items()}
     vol_rows = {}
+    vol_predictions = {}
     realised = (dev_eval.terminal_price.to_numpy() - spot) / spot
 
     for estimator in build_estimators():
@@ -484,13 +653,26 @@ def main(argv: Optional[list[str]] = None) -> int:
         s_rem = sigma_remaining_from(sigma_est[ok], seconds[ok])
         p = gaussian_terminal(buffer[ok], s_rem).p_yes
         rep = assess(p, outcome[ok], estimator.name)
-        acc = float(np.mean(np.where(p >= 0.5, outcome[ok] == 1, outcome[ok] == 0)))
+        correct = np.where(p >= 0.5, outcome[ok] == 1, outcome[ok] == 0).astype(float)
+        acc_interval = clustered_accuracy(correct, groups[ok], n_boot=args.boot, seed=SEED)
+        brier_interval = clustered_metric(
+            p, outcome[ok], groups[ok], "brier", n_boot=args.boot, seed=SEED)
+        logloss_interval = clustered_metric(
+            p, outcome[ok], groups[ok], "logloss", n_boot=args.boot, seed=SEED)
+        acc = acc_interval.point
         rop = float(np.std(realised[ok], ddof=1) / np.mean(s_rem))
+        full_prediction = np.full(len(dev_eval), np.nan)
+        full_prediction[ok] = p
+        vol_predictions[estimator.name] = full_prediction
         vol_rows[estimator.name] = {
             "description": estimator.description, "n": int(ok.sum()),
             "coverage": float(ok.mean()), "brier": rep.brier, "logloss": rep.logloss,
             "slope": rep.slope, "intercept": rep.intercept, "ece": rep.ece,
             "accuracy": acc, "realised_over_predicted": rop,
+            "brier_ci": [brier_interval.low, brier_interval.high],
+            "logloss_ci": [logloss_interval.low, logloss_interval.high],
+            "accuracy_ci": [acc_interval.low, acc_interval.high],
+            "n_windows": int(len(np.unique(groups[ok]))),
             "mean_sigma_1m": float(np.mean(sigma_est[ok])),
         }
         print(f"  {estimator.name:<18}{pct(float(ok.mean()),1):>10}{f(rep.brier):>9}"
@@ -498,9 +680,124 @@ def main(argv: Optional[list[str]] = None) -> int:
               f"{pct(acc,2):>10}{f(rop,3):>11}")
     summary["volatility"] = vol_rows
 
+    print("\n  WINDOW-CLUSTERED INTERVALS AND PAIRED BRIER vs VALIDATED")
+    print(f"  {'estimator':<18}{'Brier 95% CI':>25}{'accuracy 95% CI':>25}"
+          f"{'dBrier 95% CI':>27}{'verdict':>20}")
+    print("  " + "-" * 115)
+    vol_comparisons = {}
+    validated_p = vol_predictions.get("validated")
+    for name, p in vol_predictions.items():
+        row = vol_rows[name]
+        if name == "validated":
+            delta, lo, hi, verdict = 0.0, 0.0, 0.0, "ANCHOR ESTIMATOR"
+        else:
+            both = np.isfinite(p) & np.isfinite(validated_p)
+            delta, lo, hi = paired_bootstrap_difference(
+                p[both], validated_p[both], outcome[both], groups[both],
+                "brier", n_boot=args.boot, seed=SEED)
+            verdict = ("BEATS validated" if np.isfinite(hi) and hi < 0
+                       else "WORSE" if np.isfinite(lo) and lo > 0
+                       else "NOT DISTINGUISHABLE")
+        vol_comparisons[name] = {"delta_brier": delta, "ci": [lo, hi],
+                                 "verdict": verdict, "n": row["n"]}
+        bci = f"[{f(row['brier_ci'][0],5)}, {f(row['brier_ci'][1],5)}]"
+        aci = f"[{pct(row['accuracy_ci'][0],2)}, {pct(row['accuracy_ci'][1],2)}]"
+        dci = f"{f(delta,5)} [{f(lo,5)}, {f(hi,5)}]"
+        print(f"  {name:<18}{bci:>25}{aci:>25}{dci:>27}{verdict:>20}")
+    summary["volatility_vs_validated"] = vol_comparisons
+
+    # ------------------------------------------ cross-asset dependence
+    print("\n[CROSS-ASSET] SAME-WINDOW DEPENDENCE DIAGNOSTICS\n")
+    contract_rows = dev_eval[["group_key", "asset", "reference", "terminal_price"]].drop_duplicates(
+        ["group_key", "asset"]
+    ).copy()
+    contract_rows["terminal_return"] = (
+        contract_rows["terminal_price"] / contract_rows["reference"] - 1.0
+    )
+    return_panel = contract_rows.pivot(index="group_key", columns="asset", values="terminal_return")
+    corr = return_panel.corr(min_periods=30)
+    corr_values = corr.to_numpy(dtype="float64")
+    off_diag = corr_values[np.triu_indices_from(corr_values, k=1)]
+    complete_corr = np.nan_to_num(corr_values, nan=0.0)
+    np.fill_diagonal(complete_corr, 1.0)
+    eigenvalues = np.maximum(np.linalg.eigvalsh(complete_corr), 0.0)
+    effective_assets = float(eigenvalues.sum() ** 2 / np.sum(eigenvalues ** 2))
+    direction_panel = np.sign(return_panel)
+    direction_agreement = float(
+        direction_panel.apply(
+            lambda row: max((row > 0).mean(), (row < 0).mean()), axis=1
+        ).mean()
+    )
+    cross_asset = {
+        "n_windows": int(len(return_panel)),
+        "assets": list(return_panel.columns),
+        "correlation_matrix": corr.to_dict(),
+        "mean_pairwise_correlation": float(np.nanmean(off_diag)),
+        "median_pairwise_correlation": float(np.nanmedian(off_diag)),
+        "effective_independent_assets": effective_assets,
+        "mean_same_direction_share": direction_agreement,
+        "interpretation": (
+            "Same-window assets are materially dependent; rows are not independent "
+            "bets and uncertainty must remain window-clustered."
+        ),
+    }
+    print(f"  windows={cross_asset['n_windows']}  assets={len(cross_asset['assets'])}")
+    print(f"  mean pairwise terminal-return correlation="
+          f"{f(cross_asset['mean_pairwise_correlation'],3)}")
+    print(f"  effective independent assets of {len(cross_asset['assets'])}="
+          f"{f(effective_assets,2)}")
+    print(f"  mean share resolving in the same direction={pct(direction_agreement,1)}")
+    print("\n  terminal-return correlation matrix:")
+    print(corr.round(3).to_string())
+    summary["cross_asset_dependence"] = cross_asset
+
+    robust_winners = [name for name, row in comparisons.items()
+                      if row["verdict"] == "BEATS Normal-Z"]
+    if robust_winners:
+        # This is deliberately descriptive only. Any replacement still needs
+        # user review because Phase 5 does not silently promote a model.
+        conclusion = ("At least one challenger cleared the paired clustered Brier interval: "
+                      + ", ".join(robust_winners)
+                      + ". Normal-Z remains the anchor pending explicit review.")
+    else:
+        conclusion = ("No challenger robustly beat Normal-Z on out-of-sample Brier score. "
+                      "Normal-Z remains the probability anchor.")
+    summary["conclusion"] = conclusion
+    summary["survival_recommendations"] = [
+        "Normal-Z: SURVIVES as the probability anchor; it is not altered by fragility.",
+        "Student-t: retain only as a heavy-tail diagnostic unless its paired clustered Brier interval beats Normal-Z.",
+        "Empirical conditional distribution and empirical bootstrap: retain as diagnostic challengers, not production replacements without robust OOS improvement.",
+        "Monte Carlo: retain for terminal quantiles, sampling error, and path-dependent crossing diagnostics; not as directional alpha.",
+        "Digital sensitivities (d2/delta/gamma/vega/theta): retain as diagnostics only.",
+        "Fragility and disagreement: retain as abstention research diagnostics; do not shade calibrated probability with either score.",
+        "Conservative lower bounds: retain as displayed uncertainty diagnostics where sampling error/model dispersion is defensible.",
+        "Validated volatility estimator: retain unless a challenger beats it under paired window-clustered Brier comparison.",
+        "Same-window grouping and cross-asset dependence adjustment: mandatory for all later uncertainty estimates.",
+    ]
+    summary["detailed_limitations"] = [
+        "PROXY SETTLEMENT REFERENCE: labels use the first qualifying underlying bar, not a verified venue settlement reference.",
+        "NO HISTORICAL WEBULL CONTRACT QUOTES: market-implied probability, spread, and execution cost cannot be reconstructed.",
+        "CLASSIFICATION RESEARCH ONLY.",
+        "NOT A PROFITABILITY BACKTEST: no EV, P&L, break-even, fee, slippage, or return claim is supported.",
+        "LIMITED RECENT HISTORICAL REGIME: the sample does not establish robustness across bull, bear, shock, or illiquid regimes.",
+        "The untouched chronological holdout is not used in Phase 5 tuning or model selection.",
+        "Multiple scan rows share one contract outcome; effective sample size is far below row count.",
+        "BTC/ETH/SOL/ADA/XRP within the same 15-minute window are strongly dependent and cannot be counted as independent bets.",
+        "Yahoo one-minute bars are coarse and may differ from live or venue-index observations.",
+        "Monte Carlo standard error measures finite-path sampling error only, not model misspecification.",
+        "Gaussian crossing probability relies on a driftless continuous-path approximation; empirical 15-second MC crossing is grid-dependent.",
+        "Empirical/bootstrap channels assume the limited recent training regime is informative about evaluation states.",
+        "Fragility weights are declared diagnostics, not outcome-fitted probabilities; selective improvements may partly reflect mechanically easier late-window states.",
+        "NO TRADE is an abstention, not an incorrect prediction.",
+    ]
+
     path = out_dir / "mantis_v4_phase5_summary.json"
     path.write_text(json.dumps(summary, indent=2, default=str), encoding="utf-8")
+    report_path = PROJECT_ROOT / "research" / "PHASE5_RESULTS.md"
+    write_markdown_report(report_path, summary)
     print(f"\n  summary written: {path}")
+    print(f"  report written : {report_path}")
+    print(f"  CONCLUSION: {conclusion}")
     print(f"  holdout seal intact: {plan.seal.intact} (holdout NOT used in Phase 5 tuning)")
     print()
     banner()
