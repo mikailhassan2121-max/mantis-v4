@@ -52,19 +52,60 @@ def apply_policy_once(states: pd.DataFrame, policy: DecisionPolicy) -> pd.DataFr
         raise ValueError(f"missing Phase 6 columns: {sorted(missing)}")
     ordered = states.sort_values(["group_key", "asset", "seconds_remaining"],
                                  ascending=[True, True, False], kind="stable")
+    # Vectorised eligibility makes the policy sweep practical on ~200k states.
+    # It is exactly the conjunction in ``decide``; the first eligible state in
+    # chronological scan order is selected. Invalid/NO TRADE rows remain
+    # ineligible but do not prevent a later valid entry, matching live replay.
+    confidence = np.maximum(ordered.p_yes.to_numpy(), 1-ordered.p_yes.to_numpy())
+    eligible = (
+        ordered.get("data_fresh", pd.Series(True, index=ordered.index)).astype(bool).to_numpy()
+        & ordered.get("reference_valid", pd.Series(True, index=ordered.index)).astype(bool).to_numpy()
+        & ordered.get("contract_valid", pd.Series(True, index=ordered.index)).astype(bool).to_numpy()
+        & ordered.get("sufficient_history", pd.Series(True, index=ordered.index)).astype(bool).to_numpy()
+        & np.isfinite(ordered[["seconds_remaining","p_yes","lower_bound","normal_z",
+                               "fragility","disagreement","crossing_risk"]]).all(axis=1).to_numpy()
+        & ordered.seconds_remaining.between(0, 900).to_numpy()
+        & ordered.p_yes.between(0, 1).to_numpy()
+        & ordered.lower_bound.between(0, 1).to_numpy()
+        & (ordered.lower_bound.to_numpy() <= confidence + 1e-12)
+        & (confidence >= policy.probability_threshold)
+        & ordered.seconds_remaining.le(policy.max_seconds_remaining).to_numpy()
+        & ordered.seconds_remaining.ge(policy.min_seconds_remaining).to_numpy()
+        & ordered.seconds_remaining.gt(policy.no_trade_seconds).to_numpy()
+        & (np.abs(ordered.normal_z.to_numpy()) >= policy.min_abs_z)
+    )
+    if policy.early_wait_seconds > 0:
+        eligible &= ordered.seconds_remaining.le(policy.early_wait_seconds).to_numpy()
+    if policy.lcb_threshold is not None:
+        eligible &= ordered.lower_bound.ge(policy.lcb_threshold).to_numpy()
+    if policy.max_fragility is not None:
+        eligible &= ordered.fragility.le(policy.max_fragility).to_numpy()
+    if policy.max_disagreement is not None:
+        eligible &= ordered.disagreement.le(policy.max_disagreement).to_numpy()
+    if policy.max_crossing_probability is not None:
+        eligible &= ordered.crossing_risk.le(policy.max_crossing_probability).to_numpy()
+    if policy.max_crossings is not None:
+        eligible &= ordered.get("crossings", pd.Series(0,index=ordered.index)).le(policy.max_crossings).to_numpy()
+
+    keys = ["contract_id", "asset"]
+    first = ordered.loc[eligible].groupby(keys, sort=False).head(1)
+    chosen_keys = pd.MultiIndex.from_frame(first[keys])
+    all_keys = pd.MultiIndex.from_frame(ordered[keys].drop_duplicates())
+    missing_keys = all_keys.difference(chosen_keys, sort=False)
+    if len(missing_keys):
+        key_index = pd.MultiIndex.from_frame(ordered[keys])
+        fallback = ordered.loc[key_index.isin(missing_keys)].groupby(keys, sort=False).tail(1)
+    else:
+        fallback = ordered.iloc[0:0]
+    chosen = pd.concat([first.assign(replay_entered=True), fallback.assign(replay_entered=False)])
+    chosen = chosen.sort_values(["group_key","asset"], kind="stable")
+
     records = []
-    for (_, _), block in ordered.groupby(["contract_id", "asset"], sort=False):
-        entered = None
-        last = None
-        for row in block.itertuples(index=False):
-            result = decide(_inputs(row), policy)
-            last = (row, result)
-            if result.decision in (Decision.ENTER_YES, Decision.ENTER_NO):
-                entered = (row, result)
-                break
-            if result.decision in (Decision.DATA_HOLD, Decision.NO_TRADE):
-                continue
-        row, result = entered or last
+    for row in chosen.itertuples(index=False):
+        result = decide(_inputs(row), policy)
+        entered = bool(row.replay_entered)
+        if entered and result.decision not in (Decision.ENTER_YES, Decision.ENTER_NO):
+            raise AssertionError("vectorised eligibility disagrees with decision engine")
         records.append({
             "policy": policy.name, "contract_id": row.contract_id, "asset": row.asset,
             "group_key": row.group_key, "seconds_remaining": float(row.seconds_remaining),
@@ -75,7 +116,7 @@ def apply_policy_once(states: pd.DataFrame, policy: DecisionPolicy) -> pd.DataFr
             "lower_bound": float(row.lower_bound), "fragility": float(row.fragility),
             "disagreement": float(row.disagreement), "normal_z": float(row.normal_z),
             "crossing_risk": float(row.crossing_risk), "outcome_yes": int(row.outcome_yes),
-            "entered": entered is not None, "ev_status": result.ev_status,
+            "entered": entered, "ev_status": result.ev_status,
         })
     return pd.DataFrame(records)
 

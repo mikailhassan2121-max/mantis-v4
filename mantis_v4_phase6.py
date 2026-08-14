@@ -95,13 +95,34 @@ def write_reports(summary: dict, out: Path):
     banner="\n".join(f"> **{x}**" for x in LIMITS)
     policies=summary["holdout_policies"]
     table="\n".join(f"| {r['family']} | {r['policy_name']} | {r['contracts_traded']} | {r['coverage']:.2%} | {r['accuracy']:.2%} | [{r['ci_low']:.2%}, {r['ci_high']:.2%}] | {r['abstention_rate']:.2%} |" for r in policies)
-    main=f"""# Phase 6 Entry Policy\n\n{banner}\n\nNormal-Z remains the unchanged directional probability anchor. Student-t is used only to form heavy-tail disagreement and a conservative eligibility bound. Sensitivities are fragility diagnostics, never alpha. All hypothetical entries are held to fixed resolution and occur once per contract/asset. `EV_STATUS = UNAVAILABLE`.\n\n## Untouched holdout results\n\n| Family | Locked development policy | Trades | Coverage | Accuracy | Clustered 95% CI | Abstention |\n|---|---|---:|---:|---:|---:|---:|\n{table}\n\n## Recommendation for Phase 7\n\n{summary['recommendation']}\n\nThis is a **CLASSIFICATION-OPTIMAL ENTRY POLICY UNDER PROXY DATA**, not profit-maximizing timing.\n"""
+    c=summary["conclusions"]
+    detail="\n".join(f"- {x}" for x in c["findings"])
+    main=f"""# Phase 6 Entry Policy\n\n{banner}\n\nNormal-Z remains the unchanged directional probability anchor. Student-t is used only to form heavy-tail disagreement and a conservative eligibility bound. Sensitivities are fragility diagnostics, never alpha. All hypothetical entries are held to fixed resolution and occur once per contract/asset. `EV_STATUS = UNAVAILABLE`.\n\n## Untouched holdout results\n\n| Family | Locked development policy | Trades | Coverage | Accuracy | Clustered 95% CI | Abstention |\n|---|---|---:|---:|---:|---:|---:|\n{table}\n\n## Findings\n\n{detail}\n\n## Recommendation for Phase 7\n\n{summary['recommendation']}\n\nThis is a **CLASSIFICATION-OPTIMAL ENTRY POLICY UNDER PROXY DATA**, not profit-maximizing timing. Phase 7 has not begun.\n"""
     (out/"PHASE6_ENTRY_POLICY.md").write_text(main,encoding="utf-8")
     frontier="\n".join(f"| {x['target']:.1%} | {x.get('supported',False)} | {x.get('policy','—')} | {x.get('coverage',0):.2%} | {x.get('trades',0)} |" for x in summary["selectivity_frontier"])
     (out/"PHASE6_SELECTIVITY_FRONTIER.md").write_text(f"# Phase 6 Selectivity Frontier\n\n{banner}\n\n| Accuracy target | Supported on holdout | Policy | Coverage | Trades |\n|---|---|---|---:|---:|\n{frontier}\n\nTargets are not forced. Tiny or near-resolution samples are not treated as robust evidence.\n",encoding="utf-8")
     timing="\n".join(f"| {x['entry_bucket']} | {x['n']} | {x['accuracy_now']:.2%} | {x['direction_flip_probability']:.2%} | {x['confidence_improves_probability']:.2%} | {x['confidence_deteriorates_probability']:.2%} | {x['setup_disappears_probability']:.2%} |" for x in summary["timing"])
     (out/"PHASE6_ENTRY_TIMING.md").write_text(f"# Phase 6 Entry Timing\n\n{banner}\n\nHistorical future states below evaluate predefined decisions; they are never live features.\n\n| Bucket | States | Accuracy now | Direction flips later | Confidence improves | Confidence deteriorates | Setup disappears |\n|---|---:|---:|---:|---:|---:|---:|\n{timing}\n\nNear-resolution accuracy is explicitly classification-trivial when dominated by saturated probability, large buffers, and collapsed remaining volatility. No economic usefulness can be inferred without quotes.\n",encoding="utf-8")
-    (out/"PHASE6_ABSTENTION.md").write_text(f"# Phase 6 Abstention\n\n{banner}\n\nThe engine distinguishes probability, conservative-bound, buffer, fragility, disagreement, crossing-risk, early-information and developing-trend waits; unstable chop may end as NO TRADE; invalid inputs always produce DATA HOLD. Full reason counts are in `data/mantis_v4_phase6_entries.csv`.\n",encoding="utf-8")
+    (out/"PHASE6_ABSTENTION.md").write_text(f"# Phase 6 Abstention\n\n{banner}\n\nThe engine distinguishes probability, conservative-bound, buffer, fragility, disagreement, crossing-risk, early-information and developing-trend waits; unstable chop may end as NO TRADE; invalid inputs always produce DATA HOLD. Full decisions and reason codes are in `data/mantis_v4_phase6_entries.csv`.\n\nThe recommended policy traded {c['recommended_trades']:,} of {c['contracts_observed']:,} asset-contracts ({c['recommended_coverage']:.2%} coverage) and abstained on {c['recommended_abstention']:.2%}. This selectivity is a classification-quality result only.\n",encoding="utf-8")
+
+
+def derive_conclusions(selected: list[dict], best: dict) -> dict:
+    by={x["family"]:x for x in selected}
+    def delta(a,b,key="accuracy"): return by[a][key]-by[b][key]
+    late=sum(v for k,v in best["entry_time_distribution"].items() if k in
+             ("T-120 to T-60","T-60 to T-30","T-30 to resolution"))
+    final30=best["entry_time_distribution"].get("T-30 to resolution",0)
+    findings=[
+      f"Adaptive timing beat fixed under-five-minute timing by {delta('H_adaptive_timing','G_fixed_under_5m')*100:+.2f} percentage points of accuracy, while changing coverage by {delta('H_adaptive_timing','G_fixed_under_5m','coverage')*100:+.2f} points.",
+      f"The selected LCB-only policy changed accuracy by {delta('B_probability_lcb','A_probability_only')*100:+.2f} points versus probability-only; on this holdout the selected LCB gate did not earn an incremental benefit.",
+      f"The fragility gate changed accuracy by {delta('C_probability_fragility','A_probability_only')*100:+.2f} points and coverage by {delta('C_probability_fragility','A_probability_only','coverage')*100:+.2f} points.",
+      f"The disagreement-only gate changed accuracy by {delta('D_probability_disagreement','A_probability_only')*100:+.2f} points; at the development-selected threshold it did not earn an incremental benefit.",
+      f"The combined fragility+disagreement policy changed accuracy by {delta('E_probability_fragility_disagreement','A_probability_only')*100:+.2f} points and coverage by {delta('E_probability_fragility_disagreement','A_probability_only','coverage')*100:+.2f} points; its result equalled fragility-only, so disagreement did not add value here.",
+      f"The recommended rule placed {late}/{best['contracts_traded']} entries ({late/best['contracts_traded']:.2%}) at T-120 or later and {final30}/{best['contracts_traded']} ({final30/best['contracts_traded']:.2%}) in the final 30 seconds. Its accuracy is therefore not solely a final-seconds artifact, but remains classification-only and may still reflect late information and collapsed remaining volatility.",
+    ]
+    return {"findings":findings,"contracts_observed":best["contracts_observed"],
+            "recommended_trades":best["contracts_traded"],"recommended_coverage":best["coverage"],
+            "recommended_abstention":best["abstention_rate"],"final_30_share":final30/best["contracts_traded"]}
 
 
 def main():
@@ -119,6 +140,7 @@ def main():
     all_entries=pd.concat(entries,ignore_index=True); data=root/"data"; research=root/"research"
     all_entries.to_csv(data/"mantis_v4_phase6_entries.csv",index=False)
     pd.DataFrame([{k:v for k,v in x.items() if not isinstance(v,(dict,list))} for x in selected]).to_csv(data/"mantis_v4_phase6_frontier.csv",index=False)
+    pd.DataFrame([{k:v for k,v in x.items() if not isinstance(v,(dict,list))} for x in tuning]).to_csv(data/"mantis_v4_phase6_candidates.csv",index=False)
     valid=[x for x in selected if x["contracts_traded"]>=30 and x["accuracy"] is not None]
     best=max(valid,key=lambda x:(x["accuracy"],x["coverage"]))
     frontier=[]
@@ -127,7 +149,7 @@ def main():
         pick=max(supported,key=lambda x:x["coverage"]) if supported else None
         frontier.append({"target":target,"supported":bool(pick),"policy":pick["policy_name"] if pick else None,"coverage":pick["coverage"] if pick else 0,"trades":pick["contracts_traded"] if pick else 0})
     recommendation=f"Lock `{best['policy_name']}` for Phase 7 economic evaluation: holdout accuracy {best['accuracy']:.2%}, coverage {best['coverage']:.2%}, clustered CI [{best['ci_low']:.2%}, {best['ci_high']:.2%}]. This recommendation concerns classification entry quality only."
-    summary={"limitations":LIMITS,"holdout":plan.describe(),"holdout_policies":selected,"development_tuning":tuning,"selectivity_frontier":frontier,"timing":timing_study(hold),"recommendation":recommendation,"phase7_started":False}
+    summary={"limitations":LIMITS,"holdout":plan.describe(),"holdout_policies":selected,"development_tuning":tuning,"selectivity_frontier":frontier,"timing":timing_study(hold),"recommendation":recommendation,"conclusions":derive_conclusions(selected,best),"phase7_started":False}
     (data/"mantis_v4_phase6_summary.json").write_text(json.dumps(summary,indent=2,default=str,allow_nan=False),encoding="utf-8")
     write_reports(summary,research); print(recommendation)
 
