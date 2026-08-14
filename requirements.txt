@@ -1,0 +1,29 @@
+# MANTIS V4 dependencies.
+#
+# Phase 2 added this file so the project stops depending on undocumented local
+# installs. Every entry below is justified; nothing speculative is included.
+#
+# Install:  python -m pip install -r requirements.txt
+
+# --- required by Phase 2 (contract semantics, providers, quality, recording) --
+numpy>=1.26            # vectorised bar/volatility arithmetic
+pandas>=2.1            # OHLCV frames, tz-aware DatetimeIndex handling
+yfinance>=0.2.40       # 1-minute bar fallback/bootstrap source (section 26J)
+rich>=13.0             # terminal UI (full UI lands in Phase 9)
+tzdata>=2024.1         # IANA timezone database; required on Windows.
+                       # V3 silently fell back to LOCAL time when this was
+                       # missing while still printing "ET" (audit G-6). V4
+                       # refuses to start instead, so this is not optional.
+
+# --- required by Phase 4-5 (declared now, not yet imported) -------------------
+scipy>=1.11            # norm.cdf for the transparent normal-Z baseline
+                       # (section 26D) and distribution/statistical tests
+scikit-learn>=1.4      # logistic/probit baselines, isotonic and Platt
+                       # calibration, reliability curves (sections 6 and 21)
+
+# NOTE: no gradient-boosting or deep-learning dependency is declared. Master
+# prompt sections 6 and 21 require that such a dependency be justified by
+# out-of-sample results first. It has not been, so it is not here.
+#
+# sqlite3, csv, json, zoneinfo, dataclasses and typing are stdlib.
+# Tests use stdlib unittest; no pytest dependency is required.

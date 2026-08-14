@@ -1,0 +1,38 @@
+{
+  "_comment": [
+    "MANTIS V4 local configuration EXAMPLE.",
+    "",
+    "Copy to config/mantis_v4.local.json and edit. That filename is gitignored.",
+    "",
+    "CREDENTIALS: prefer environment variables over this file. Environment",
+    "variables take precedence over anything written here:",
+    "    WEBULL_APP_KEY",
+    "    WEBULL_APP_SECRET",
+    "    WEBULL_MARKET_DATA_ENABLED   (1/true/yes/on)",
+    "    WEBULL_REGION                (default: us)",
+    "",
+    "Never commit real credentials. MantisConfig redacts them from all output,",
+    "but the safest secret is the one that was never written to disk.",
+    "",
+    "Any key not recognised by MantisConfig raises an error at startup rather",
+    "than being silently ignored."
+  ],
+
+  "enabled_assets": ["BTC-USD", "ETH-USD", "SOL-USD", "ADA-USD", "XRP-USD"],
+
+  "scan_interval_seconds": 5.0,
+  "network_timeout_seconds": 8.0,
+
+  "max_data_age_seconds": 90.0,
+  "max_quote_age_seconds": 15.0,
+
+  "voice_enabled": true,
+  "plain_cmd_mode": false,
+
+  "credentials": {
+    "app_key": "",
+    "app_secret": "",
+    "market_data_enabled": false,
+    "region": "us"
+  }
+}

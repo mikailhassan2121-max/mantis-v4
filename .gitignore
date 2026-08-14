@@ -216,3 +216,31 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# ============================================================
+# MANTIS V4
+# ============================================================
+# Credentials. NEVER commit these. Secrets come from environment variables or
+# this gitignored local file only (master prompt section 26A).
+config/mantis_v4.local.json
+config/*.local.json
+.env.mantis
+
+# User-supplied contract specifications (may contain account-specific data).
+config/contracts/*.json
+config/contracts/*.csv
+!config/contracts/README.md
+!config/contracts/example_contract.json
+
+# Generated research data, ledgers and databases.
+data/
+*.db
+*.db-wal
+*.db-shm
+mantis_v4_*.csv
+mantis_v4_*.json
+mantis_resolution_v3_*.csv
+mantis_resolution_v3_*.db
+
+# Trained models and metrics (Phase 5+).
+models/
