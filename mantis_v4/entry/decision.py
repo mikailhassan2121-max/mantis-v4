@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 import math
-from typing import Optional
+from typing import Any, Optional
 
 
 class Decision(str, Enum):
@@ -50,17 +50,6 @@ class RiskDiagnostics:
 
 
 @dataclass(frozen=True)
-class ContractEconomics:
-    yes_ask: Optional[float] = None
-    no_ask: Optional[float] = None
-    spread: Optional[float] = None
-    fees: Optional[float] = None
-    break_even_probability: Optional[float] = None
-    market_implied_probability: Optional[float] = None
-    quote_fresh: Optional[bool] = None
-
-
-@dataclass(frozen=True)
 class DecisionInputs:
     asset: str
     contract_id: str
@@ -73,7 +62,7 @@ class DecisionInputs:
     rollover_detected: bool = False
     sufficient_history: bool = True
     diagnostics_consistent: bool = True
-    economics: Optional[ContractEconomics] = None
+    economics: Optional[Any] = None
 
 
 @dataclass(frozen=True)

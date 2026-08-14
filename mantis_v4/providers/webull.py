@@ -18,31 +18,27 @@ What the Phase 1 audit CONFIRMED from official Webull documentation:
       2026-03-14  "Event Bars" and "Event Tick" added
       2026-03-28  real-time streaming for event contracts
   * Authentication is mandatory. There is no anonymous access. Clients are
-    constructed with an App Key and App Secret; the secret is used client-side
-    to sign requests. A separate OpenAPI market-data subscription is required
-    (a 403 indicates it is missing).
+    constructed with an App Key and App Secret; the SDK signs requests.
+    The current market-data overview says event contracts require no additional
+    subscription (subscriptions are required for several other products).
   * Order constraints: LIMIT + DAY only, instrument_type EVENT, event_outcome
     in {yes, no}, price range $0.01-$0.99.
   * The SDK repository ``webull-inc/openapi-python-sdk`` is ARCHIVED. The
     current one is ``webull-inc/webull-openapi-python-sdk``.
 
-What the audit could NOT confirm, and therefore what this file will NOT guess
-(audit UNKNOWN-1 through UNKNOWN-6):
+What still cannot be inferred from a generic response, and will not be guessed:
 
   1. whether crypto event contracts exist at a 15-MINUTE cadence, and on which
      underlyings;
-  2. whether the market-data subscription requirement extends to event
-     contracts and crypto (the docs state it for US stocks and ETFs);
-  3. the exact settlement rule -- reference source, timestamp, TWAP vs
+  2. the exact settlement rule -- reference source, timestamp, TWAP vs
      point-in-time, tie handling;
-  4. the exact response FIELD NAMES of Event Snapshot / Get Event Contract
-     Instruments (strike/threshold, YES/NO bid/ask, expiration, quote
-     timestamp);
-  5. the current event-contract fee schedule;
-  6. rate limits, and whether a sandbox supports event market data.
+  3. which discovered venue instrument maps to MANTIS's active contract;
+  4. whether a receipt timestamp is authoritative enough for quote freshness.
 
-Because (4) is unknown, the concrete request/parse step is deliberately left
-unimplemented behind a single clearly marked seam, ``_fetch_contract_payload``.
+The current official snapshot schema documents ``yes_bid``, ``yes_ask``,
+``no_bid``, ``no_ask``, side sizes, volume, open interest and last-trade time.
+The concrete request remains behind ``_fetch_contract_payload`` until live
+credentials can validate instrument mapping and freshness semantics.
 Writing a plausible-looking ``client.get_event_snapshot(...)`` call with
 invented field names would be exactly the fabrication the master prompt
 forbids, and it would fail silently or -- far worse -- succeed against the
@@ -140,10 +136,8 @@ class OfficialWebullOpenAPIProvider(EventContractProvider):
                 "WEBULL_MARKET_DATA_ENABLED is not set",
             )
             return
-        self.health.set_state(
-            HealthState.SCHEMA_UNVERIFIED,
-            "event-contract response schema not yet verified (UNKNOWN-4)",
-        )
+        self.health.set_state(HealthState.SCHEMA_UNVERIFIED,
+            "documented quote schema; live instrument mapping not verified")
 
     @property
     def is_operational(self) -> bool:

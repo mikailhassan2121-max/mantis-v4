@@ -1,0 +1,21 @@
+{
+  "contracts": [
+    {
+      "asset": "BTC-USD",
+      "contract_id": "REPLACE_WITH_ACTIVE_CONTRACT_ID",
+      "reference": 65000.0,
+      "resolution_time": "2026-08-14T16:15:00Z",
+      "yes_ask": 0.60,
+      "yes_bid": 0.58,
+      "no_ask": 0.42,
+      "no_bid": 0.40,
+      "payout": 1.0,
+      "quote_timestamp": "2026-08-14T16:12:00Z",
+      "settlement_rule": "TERMINAL_ABOVE_REFERENCE",
+      "source": "MANUAL_VERIFIED_WEBULL_SCREEN",
+      "verified": true,
+      "fees_status": "UNKNOWN_FEES",
+      "slippage_status": "SLIPPAGE_NOT_MODELED"
+    }
+  ]
+}

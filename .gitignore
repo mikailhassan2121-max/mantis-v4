@@ -231,6 +231,7 @@ config/contracts/*.json
 config/contracts/*.csv
 !config/contracts/README.md
 !config/contracts/example_contract.json
+!config/contracts/example_economics.json
 
 # Generated research data, ledgers and databases.
 data/
