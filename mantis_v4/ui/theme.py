@@ -27,6 +27,12 @@ PRODUCT_SHORT = "M A N T I S"
 SOFTWARE_VERSION = "MANTIS V4 / PHASE 9 COMMAND CENTER"
 ADVISORY_BANNER = "OBSERVATION ONLY — NO AUTOMATED EXECUTION"
 
+# The operating environment owns the boot identity; MANTIS is the subsystem that
+# boots inside it. SHG is therefore large at startup and quiet afterwards.
+SYSTEM_OWNER = "SAAF HOLDINGS GROUP"
+SYSTEM_OWNER_SHORT = "SHG"
+SYSTEM_OWNER_LINE = "SAAF HOLDINGS GROUP // INTELLIGENCE SYSTEMS"
+
 WORDMARK = r"""
  ▄▄▄▄▄▄   ▄▄▄▄    ▄▄     ▄▄  ▄▄▄▄▄▄  ▄▄  ▄▄▄▄▄▄▄   ▄▄▄▄
  ██   ██  ██  ██  ███   ███    ██    ██  ██       ██

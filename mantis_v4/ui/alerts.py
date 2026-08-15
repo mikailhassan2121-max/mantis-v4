@@ -62,6 +62,13 @@ class AlertRouter:
         self._last_audio: dict[str, float] = {}
         self._last_voice: dict[str, float] = {}
         self._last_wait: dict[str, str] = {}
+        # The scanner may emit events while the cinematic browser boot is still
+        # running. Log them immediately, but do not let operational tones or
+        # speech collide with the curated boot soundtrack.
+        gate = float(getattr(config, "startup_alert_suppression_seconds", 0.0))
+        if bool(getattr(config, "boot_sequence_enabled", False)):
+            gate = max(gate, float(getattr(config, "boot_duration", 0.0)) + 1.0)
+        self._live_alerts_at = time.monotonic() + gate
         self.routed: list[tuple[str, str]] = []   # (event type, severity) for tests
 
     # -- subscription -------------------------------------------------------
@@ -111,12 +118,13 @@ class AlertRouter:
         self.routed.append((event.type.value, route.severity.value))
         del self.routed[:-64]
 
-        if route.audio_cue and self.config.audio_allows(route.audio_key):
+        live_alerts = time.monotonic() >= self._live_alerts_at
+        if live_alerts and route.audio_cue and self.config.audio_allows(route.audio_key):
             if self._allow(self._last_audio, f"{route.audio_cue}:{asset}",
                            self.config.audio_min_interval_seconds):
                 self.audio.play(route.audio_cue)
 
-        if spoken and self.config.voice_allows(route.voice_key):
+        if live_alerts and spoken and self.config.voice_allows(route.voice_key):
             if self._allow(self._last_voice, f"{route.voice_key}:{asset}",
                            self.config.voice_min_interval_seconds):
                 self.voice.say(spoken)

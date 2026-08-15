@@ -9,10 +9,9 @@
 numpy>=1.26            # vectorised bar/volatility arithmetic
 pandas>=2.1            # OHLCV frames, tz-aware DatetimeIndex handling
 yfinance>=0.2.40       # 1-minute bar fallback/bootstrap source (section 26J)
-rich>=13.0             # terminal UI. Phase 9 builds the command center on
-                       # rich.live.Live + rich.layout.Layout. No new UI
-                       # dependency was added; see PHASE9_UI_ARCHITECTURE.md
-                       # for why Textual and a web stack were rejected.
+rich>=13.0             # supported terminal fallback. Phase 9's default shell
+                       # is stdlib HTTP/SSE rendered by an installed Chromium
+                       # browser, so it adds no Python UI dependency.
 tzdata>=2024.1         # IANA timezone database; required on Windows.
                        # V3 silently fell back to LOCAL time when this was
                        # missing while still printing "ET" (audit G-6). V4

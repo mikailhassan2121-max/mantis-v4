@@ -72,6 +72,8 @@ class FakeVoice:
 
 
 def router_with(**cfg_kw):
+ cfg_kw.setdefault("startup_alert_suppression_seconds",0.0)
+ cfg_kw.setdefault("boot_sequence_enabled",False)
  cfg=config(**cfg_kw); state=CommandCenterState(ASSETS,cfg)
  audio=FakeAudio(); voice=FakeVoice()
  return AlertRouter(state,audio,voice,cfg),state,audio,voice
@@ -111,6 +113,14 @@ class HookRoutingTests(unittest.TestCase):
 
 
 class AlertBehaviourTests(unittest.TestCase):
+ def test_startup_gate_logs_but_suppresses_operational_audio_and_voice(self):
+  router,state,audio,voice=router_with(startup_alert_suppression_seconds=60.0)
+  router.handle(AppEvent(EventType.ENTRY_YES,NOW.isoformat(),
+   {"asset":"BTC-USD","side":"YES"}))
+  self.assertEqual(state.snapshot().events[-1].message,"ENTER YES")
+  self.assertEqual(audio.played,[])
+  self.assertEqual(voice.spoken,[])
+
  def test_enter_yes_alert(self):
   router,state,audio,voice=router_with()
   router.handle(AppEvent(EventType.ENTRY_YES,NOW.isoformat(),

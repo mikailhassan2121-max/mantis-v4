@@ -11,6 +11,8 @@
 
 Audio and voice are advisory notifications. Neither can start, stop, alter or delay a scan, and neither carries any trading action.
 
+The browser boot owns the startup soundscape. For the default first sixteen seconds, the Python alert router continues recording events but suppresses operational tones and voice. This prevents an early demo/live snapshot from speaking asset names or YES/NO decisions over the brand prelude. Once the gate expires, the existing per-event throttles apply normally. `--no-startup` sets the gate to zero.
+
 ## Alert severity
 
 | Level | Meaning | Default treatment |

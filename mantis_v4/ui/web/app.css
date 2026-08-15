@@ -1,0 +1,753 @@
+/* MANTIS command center -- eDEX-UI spatial language, SHG/MANTIS content.
+ *
+ * Geometry follows the measurements recorded in research/PHASE9_EDEX_RESEARCH.md:
+ * 17% rails, dominant centre pane, full-width lower band, everything sized in
+ * vh so the composition is identical at any 16:9 resolution, hairline structure
+ * drawn at 30-50% alpha with full-strength colour reserved for data.
+ *
+ * No upstream asset is used. The angular corners are hand-rolled clip-paths
+ * rather than the augmented-ui library, and the typeface is a stack led by
+ * Bahnschrift (ships with Windows) rather than upstream's bundled United Sans.
+ */
+
+:root {
+    /* Default tron palette, matching the upstream theme file's values. */
+    --c: 170, 207, 209;
+    --bg: #05080d;
+    --bg-raised: #080d14;
+    --grid: #262828;
+
+    --line: rgba(var(--c), 0.5);
+    --line-soft: rgba(var(--c), 0.3);
+    --line-faint: rgba(var(--c), 0.15);
+    --value: rgb(var(--c));
+    --value-bright: #eafcff;
+    --label: rgba(var(--c), 0.55);
+    --dim: rgba(var(--c), 0.35);
+
+    --amber: #d9a441;
+    --red: #e0564f;
+    --azure: #6ea8ff;
+
+    --font-main: "Bahnschrift", "Oswald", "Roboto Condensed", "Segoe UI", sans-serif;
+    --font-mono: "Cascadia Mono", "Consolas", "Fira Mono", monospace;
+
+    --bw: 0.18vh;          /* structural border weight */
+    --hair: 0.092vh;       /* hairline rule weight */
+    --cut: 1.5vh;          /* angular corner cut */
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    background: var(--bg);
+}
+
+body {
+    color: var(--value);
+    font-family: var(--font-main);
+    font-size: 1.25vh;
+    font-stretch: 87.5%;
+    letter-spacing: 0.04em;
+    user-select: none;
+    cursor: default;
+}
+
+/* The upstream background: a faint dot at every grid intersection, produced by
+ * two gradients over the grey. body.solid switches it off, which is how the
+ * boot sequence flashes between grid and solid. */
+body.grid {
+    background:
+        linear-gradient(90deg, var(--bg) 1.85vh, transparent 1%) center,
+        linear-gradient(var(--bg) 1.85vh, transparent 1%) center,
+        var(--grid);
+    background-size: 2.04vh 2.04vh;
+}
+body.solid { background: var(--bg); }
+
+/* ------------------------------------------------------------------ texture */
+
+#scanlines {
+    position: fixed;
+    inset: 0;
+    z-index: 9000;
+    pointer-events: none;
+    background: repeating-linear-gradient(
+        to bottom,
+        rgba(0, 0, 0, 0.24) 0px, rgba(0, 0, 0, 0.24) 1px,
+        rgba(0, 0, 0, 0) 1px, rgba(0, 0, 0, 0) 3px);
+    mix-blend-mode: multiply;
+}
+#scanlines::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(ellipse at center,
+        rgba(0, 0, 0, 0) 55%, rgba(0, 0, 0, 0.45) 100%);
+}
+body.no-scanlines #scanlines { display: none; }
+
+body.flicker #scanlines { animation: flicker 90ms steps(2) infinite; }
+@keyframes flicker {
+    from { opacity: 1; }
+    to   { opacity: 0.72; }
+}
+
+/* ------------------------------------------------------------- boot screen */
+
+#boot_screen {
+    position: fixed;
+    inset: 0;
+    z-index: 9500;
+    padding: 1.4vh 1.6vh;
+    overflow: hidden;
+    background: var(--bg);
+    font-family: var(--font-mono);
+    font-size: 1.4vh;
+    letter-spacing: 0;
+    line-height: 1.35;
+    text-align: left;
+    display: flex;
+    align-items: flex-end;
+    justify-content: flex-start;
+}
+#boot_screen.center {
+    align-items: center;
+    justify-content: center;
+}
+#boot_screen.transparent { background: transparent; }
+#boot_log { width: 100%; }
+#boot_log .ok   { color: var(--value-bright); }
+#boot_log .warn { color: var(--amber); }
+
+/* The wordmark: 10vh, exactly the upstream scale. */
+#boot_screen h1 {
+    font-family: var(--font-main);
+    font-size: 10vh;
+    font-weight: 600;
+    font-stretch: 75%;
+    letter-spacing: 0.12em;
+    text-align: center;
+    margin: 0;
+    padding: 2vh 2vh 0 1.5vh;
+    border-bottom: 0.46vh solid var(--value);
+    background-color: transparent;
+    position: relative;
+    opacity: 0;
+    animation: fadeInTitle 300ms linear forwards;
+}
+@keyframes fadeInTitle { from { opacity: 0; } to { opacity: 1; } }
+
+#boot_screen h1 .sub {
+    display: block;
+    font-size: 1.4vh;
+    font-stretch: 100%;
+    letter-spacing: 0.42em;
+    padding: 1.2vh 0 0.8vh;
+    color: var(--label);
+    border: none;
+}
+
+/* Derezz: two clipped clones tearing horizontally, 50ms alternate-reverse. */
+#boot_screen h1.glitch { border-color: transparent; color: transparent; }
+#boot_screen h1[data-text]::before,
+#boot_screen h1[data-text]::after {
+    content: attr(data-text);
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 2vh;
+    height: 0;
+    opacity: 0;
+    animation-duration: 50ms;
+    animation-timing-function: linear;
+    animation-iteration-count: infinite;
+    animation-direction: alternate-reverse;
+    animation-play-state: paused;
+}
+#boot_screen h1[data-text]::before {
+    clip-path: polygon(100% 0%, 100% 42%, 0% 42%, 0% 0%);
+    color: rgba(var(--c), 0.85);
+    animation-name: derezz_top;
+}
+#boot_screen h1[data-text]::after {
+    clip-path: polygon(100% 42%, 100% 100%, 0% 100%, 0% 42%);
+    color: rgba(var(--c), 0.95);
+    animation-name: derezz_bottom;
+}
+#boot_screen h1.glitch::before,
+#boot_screen h1.glitch::after {
+    height: auto;
+    opacity: 1;
+    animation-play-state: running;
+}
+@keyframes derezz_top {
+    from { transform: translateX(-1%); }
+    to   { transform: translateX(-5%); }
+}
+@keyframes derezz_bottom {
+    from { transform: translateX(1%); }
+    to   { transform: translateX(3%); }
+}
+
+/* Cinematic identity prelude. Supplied marks are transformed into silver
+ * linework and revealed inside a scanning instrument, never shown as flat
+ * color-logo slides. */
+#brand_stage, #handoff_stage { position:absolute; inset:0; display:none; overflow:hidden; }
+#boot_screen[data-phase="prelude"] #brand_stage { display:grid; place-items:center; }
+.brand-grid { position:absolute; inset:0; opacity:.25; background:linear-gradient(90deg,transparent 49.9%,rgba(210,225,230,.22) 50%,transparent 50.1%),linear-gradient(transparent 49.9%,rgba(210,225,230,.18) 50%,transparent 50.1%); background-size:8vh 8vh; animation:brandGrid 2.2s linear infinite; }
+@keyframes brandGrid { from{transform:scale(1.08);opacity:.08} to{transform:scale(1);opacity:.28} }
+.brand-reticle { position:absolute; width:78vh; height:78vh; border:1px solid rgba(var(--c),.16); border-radius:50%; }
+.brand-reticle::before,.brand-reticle::after { content:"";position:absolute;inset:8%;border:1px dashed rgba(var(--c),.12);border-radius:50%; }
+.brand-reticle::after { inset:22%;border-style:solid;animation:reticleSpin 8s linear infinite;clip-path:polygon(0 0,100% 0,100% 28%,0 28%); }
+@keyframes reticleSpin { to{transform:rotate(360deg)} }
+.brand-card { width:min(72vw,100vh);text-align:center;opacity:0;transform:scale(.94); }
+.brand-card.acquire { animation:brandAcquire .45s steps(5) forwards; }
+.brand-card.release { animation:brandRelease .38s steps(4) forwards; }
+@keyframes brandAcquire { 0%{opacity:0;transform:scale(.94) skewX(-2deg)} 60%{opacity:.55;filter:blur(2px)} 100%{opacity:1;transform:none;filter:none} }
+@keyframes brandRelease { 0%{opacity:1} 45%{transform:translateX(1.2vh);filter:brightness(2)} 100%{opacity:0;transform:scale(1.04);filter:blur(5px)} }
+.brand-index,.brand-role,.brand-status { font-family:var(--font-mono);letter-spacing:.28em;font-size:1.05vh;color:rgba(var(--c),.62); }
+.brand-index { text-align:left;border-bottom:1px solid rgba(var(--c),.3);padding:.5vh 0; }
+.brand-frame { height:38vh;margin:1.6vh 0;position:relative;display:grid;place-items:center;overflow:hidden;clip-path:polygon(3% 0,100% 0,100% 92%,97% 100%,0 100%,0 8%);border:1px solid rgba(var(--c),.28);background:rgba(0,0,0,.78); }
+.brand-frame img { position:absolute;max-width:76%;max-height:76%;object-fit:contain;filter:grayscale(1) contrast(1.75) invert(1) brightness(1.25);mix-blend-mode:screen;opacity:.9; }
+.brand-frame img.wide { max-width:84%; }
+#brand_echo { opacity:.2;transform:translateX(.6vh);filter:grayscale(1) contrast(2) invert(1) brightness(1.8);clip-path:polygon(0 43%,100% 35%,100% 65%,0 72%);animation:brandEcho 110ms steps(2) infinite; }
+@keyframes brandEcho { 50%{transform:translateX(-.8vh)} }
+.brand-scan { position:absolute;left:0;right:0;height:.24vh;background:#fff;box-shadow:0 0 2vh rgba(var(--c),.9);animation:brandScan 1.25s cubic-bezier(.4,0,1,1) infinite; }
+@keyframes brandScan { from{top:-3%;opacity:0} 10%{opacity:1} 90%{opacity:1} to{top:103%;opacity:0} }
+.brand-crosshair::before,.brand-crosshair::after { content:"";position:absolute;background:rgba(var(--c),.16); }
+.brand-crosshair::before{left:50%;top:0;width:1px;height:100%}.brand-crosshair::after{top:50%;left:0;height:1px;width:100%}
+.brand-name { font-size:3.1vh;font-weight:600;letter-spacing:.34em;margin:.8vh 0;color:#e8eef0;text-shadow:0 0 1.6vh rgba(var(--c),.35); }
+.brand-status::before{content:"[ "}.brand-status::after{content:" ]"}
+#boot_screen[data-phase="handoff"] #handoff_stage { display:flex;flex-direction:column;justify-content:center;padding:0 17vw;gap:2.2vh; }
+.handoff-line { display:grid;grid-template-columns:1fr 20vw 24vw;align-items:center;gap:2vh;opacity:0;transform:translateX(-3vw);font-family:var(--font-mono);font-size:1.05vh;letter-spacing:.16em; }
+.handoff-line i { height:1px;background:linear-gradient(90deg,transparent,rgb(var(--c))); }
+.handoff-line b { font-family:var(--font-main);font-size:2.1vh;letter-spacing:.18em;color:#edf2f3; }
+.handoff-line.on { animation:handoffIn .5s cubic-bezier(.4,0,1,1) forwards; }
+@keyframes handoffIn { to{opacity:1;transform:none} }
+.handoff-lock { margin-top:3vh;padding:1.2vh;border-top:1px solid rgba(var(--c),.35);border-bottom:1px solid rgba(var(--c),.35);text-align:center;font-family:var(--font-mono);letter-spacing:.42em;opacity:0; }
+.handoff-lock.on { animation:lockIn .6s steps(4) forwards; }
+@keyframes lockIn { to{opacity:1;text-shadow:0 0 1vh rgba(var(--c),.7)} }
+#boot_screen[data-phase="boot"] #boot_log { display:block; }
+#boot_screen[data-phase="prelude"] #boot_log,#boot_screen[data-phase="handoff"] #boot_log { display:none; }
+
+/* ------------------------------------------------------------------- shell */
+
+#shell {
+    position: fixed;
+    inset: 0;
+    display: grid;
+    grid-template-columns: 17% 1fr 17%;
+    grid-template-rows: 1fr 26vh;
+    grid-template-areas:
+        "left centre right"
+        "band band  band";
+    gap: 1vh;
+    padding: 1vh;
+    opacity: 0;
+    transition: opacity .5s cubic-bezier(0.4, 0, 1, 1);
+}
+#shell.live { opacity: 1; }
+
+/* Rails and modules fade in one at a time, upstream's signature cadence. */
+.rail {
+    grid-area: left;
+    display: flex;
+    flex-direction: column;
+    gap: 0.7vh;
+    min-height: 0;
+    overflow: hidden;
+}
+#rail_right { grid-area: right; }
+
+/* Modules never paint outside their own box: a rail whose content exceeds the
+ * viewport clips the flexible module rather than letting rows collide with the
+ * next module's heading. */
+.module {
+    opacity: 0;
+    transition: opacity .5s cubic-bezier(0.4, 0, 1, 1);
+    min-height: 0;
+    overflow: hidden;
+    flex: 0 0 auto;
+}
+.module.on { opacity: 1; }
+
+/* The instruments absorb whatever height the fixed readouts leave. */
+#mod_telemetry { flex: 1 1 auto; display: flex; flex-direction: column; }
+#mod_telemetry .graph { flex: 1 1 auto; height: auto; min-height: 2.4vh; }
+#mod_economics { flex: 0 1 auto; }
+#mod_assetmap { flex: 1 1 auto; min-height: 8vh; }
+
+/* -------------------------------------------------------- section headings */
+
+/* Upstream's h3.title: a tiny two-label bar over a hairline rule, closed at
+ * each end by a short vertical tick so the rule reads as a bracket. */
+.title {
+    position: relative;
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin: 0 0 0.5vh;
+    padding: 0 0.7vh 0.25vh;
+    font-size: 1.02vh;
+    font-weight: 400;
+    letter-spacing: 0.18em;
+    color: var(--label);
+    border-bottom: var(--hair) solid var(--line-soft);
+    white-space: nowrap;
+}
+.title::before, .title::after {
+    content: "";
+    position: absolute;
+    bottom: 0;
+    height: 0.5vh;
+    border-left: var(--hair) solid var(--line-soft);
+}
+.title::before { left: 0; }
+.title::after  { right: 0; border-left: none; border-right: var(--hair) solid var(--line-soft); }
+.title .r { color: var(--dim); }
+
+/* ------------------------------------------------------------ angular frame */
+
+.aug {
+    position: relative;
+    background: var(--line);
+    clip-path: polygon(
+        0 0, calc(100% - var(--cut)) 0, 100% var(--cut),
+        100% 100%, var(--cut) 100%, 0 calc(100% - var(--cut)));
+}
+.aug > .inner {
+    position: absolute;
+    inset: var(--bw);
+    background: var(--bg);
+    clip-path: polygon(
+        0 0, calc(100% - var(--cut)) 0, 100% var(--cut),
+        100% 100%, var(--cut) 100%, 0 calc(100% - var(--cut)));
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+/* -------------------------------------------------------------- data rows */
+
+.rows { display: flex; flex-direction: column; }
+.row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 0.6vh;
+    padding: 0.08vh 0.7vh;
+    font-size: 1.1vh;
+    white-space: nowrap;
+}
+.row .k { color: var(--label); letter-spacing: 0.1em; }
+.row .v {
+    color: var(--value-bright);
+    font-family: var(--font-mono);
+    letter-spacing: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.row .v.dim { color: var(--dim); }
+.row.sub .k { padding-left: 1vh; color: var(--dim); }
+.rule { height: var(--hair); background: var(--line-faint); margin: 0.35vh 0.7vh; }
+
+.ok    { color: rgb(var(--c)); }
+.warnc { color: var(--amber); }
+.critc { color: var(--red); }
+
+/* status dot */
+.dot {
+    display: inline-block;
+    width: 0.7vh; height: 0.7vh;
+    margin-right: 0.5vh;
+    border-radius: 50%;
+    background: currentColor;
+    vertical-align: middle;
+}
+.dot.hollow { background: transparent; box-shadow: inset 0 0 0 0.15vh currentColor; }
+.dot.live { animation: pulse 2s ease-in-out infinite; }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+/* ------------------------------------------------------------------- clock */
+
+#mod_clock {
+    display: flex;
+    flex-direction: column;
+    padding-top: 0.6vh;
+    border-top: var(--hair) solid var(--line-soft);
+    position: relative;
+}
+#mod_clock::before, #mod_clock::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    height: 0.83vh;
+    border-left: var(--hair) solid var(--line-soft);
+}
+#mod_clock::before { left: 0; }
+#mod_clock::after  { right: 0; border-left: none; border-right: var(--hair) solid var(--line-soft); }
+
+#clock_time {
+    display: flex;
+    justify-content: center;
+    align-items: baseline;
+    font-size: 4vh;
+    font-weight: 300;
+    font-stretch: 75%;
+    line-height: 1.05;
+    color: var(--value-bright);
+}
+/* Fixed-width digit cells so the clock never reflows as numbers change. */
+#clock_time span { display: inline-block; width: 2.3vh; text-align: center; }
+#clock_time em   { display: inline-block; width: 1.1vh; text-align: center; font-style: normal; opacity: 0.6; }
+#clock_time .zone { font-size: 1.3vh; width: auto; margin-left: 0.6vh; color: var(--dim); }
+#clock_date {
+    display: flex;
+    justify-content: space-between;
+    padding: 0 0.2vh;
+    font-size: 1.05vh;
+    letter-spacing: 0.14em;
+    color: var(--label);
+}
+
+/* -------------------------------------------------------------- telemetry */
+
+.graph {
+    width: 100%;
+    height: 4.4vh;
+    display: block;
+    border-left: var(--hair) solid var(--line-faint);
+    border-bottom: var(--hair) solid var(--line-faint);
+}
+.graph-label {
+    display: flex;
+    justify-content: space-between;
+    flex: 0 0 auto;
+    font-size: 0.9vh;
+    letter-spacing: 0.14em;
+    color: var(--dim);
+    padding: 0.15vh 0 0.05vh;
+}
+
+/* meter bar */
+.meter {
+    position: relative;
+    height: 0.75vh;
+    background: rgba(var(--c), 0.12);
+    overflow: hidden;
+}
+.meter > i {
+    display: block;
+    height: 100%;
+    background: rgb(var(--c));
+    transition: width .35s cubic-bezier(0.4, 0, 1, 1);
+}
+.meter.warnc > i { background: var(--amber); }
+.meter.critc > i { background: var(--red); }
+
+/* --------------------------------------------------------- centre workspace */
+
+#workspace {
+    grid-area: centre;
+    --cut: 2vh;
+    min-height: 0;
+    transition: opacity .5s cubic-bezier(0.4, 0, 1, 1),
+                transform .5s cubic-bezier(0.85, 0.5, 0.85, 0.5);
+}
+#workspace.folded { transform: scaleY(0.02); opacity: 0; }
+
+#tabs {
+    display: flex;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    border-bottom: var(--bw) solid var(--line);
+    overflow: hidden;
+    flex: 0 0 auto;
+}
+/* Upstream's slanted tabs: skewX(35deg) on the tab, unskewed label inside. */
+#tabs li {
+    flex: 1 1 0;
+    padding: 0.75vh 0 0.5vh;
+    text-align: center;
+    font-size: 1.1vh;
+    letter-spacing: 0.2em;
+    color: var(--label);
+    background: var(--bg-raised);
+    transform: skewX(35deg);
+    cursor: pointer;
+    transition: color .2s linear, background .2s linear;
+}
+#tabs li + li { border-left: var(--bw) solid var(--line); }
+#tabs li > p { margin: 0; transform: skewX(-35deg); }
+#tabs li:hover { color: var(--value-bright); }
+#tabs li.active {
+    background: rgb(var(--c));
+    color: var(--bg);
+    font-weight: 700;
+}
+
+#work_inner { position: relative; flex: 1 1 auto; min-height: 0; }
+.view {
+    position: absolute;
+    inset: 0;
+    padding: 1.2vh 1.6vh;
+    opacity: 0;
+    pointer-events: none;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+.view.active { opacity: 1; pointer-events: auto; }
+
+/* ---------------------------------------------------- active contract view */
+
+#contract_head {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    flex: 0 0 auto;
+}
+#contract_asset {
+    font-size: 3.4vh;
+    font-weight: 600;
+    font-stretch: 75%;
+    letter-spacing: 0.1em;
+    line-height: 1;
+    color: var(--value-bright);
+}
+#contract_window {
+    font-family: var(--font-mono);
+    font-size: 1.15vh;
+    color: var(--dim);
+    letter-spacing: 0;
+    padding-top: 0.4vh;
+}
+#contract_clockbox { text-align: right; }
+#contract_countdown {
+    font-size: 6.4vh;
+    font-weight: 300;
+    font-stretch: 75%;
+    line-height: 1;
+    letter-spacing: 0.02em;
+    color: var(--value-bright);
+    font-variant-numeric: tabular-nums;
+}
+#contract_countdown.near  { color: var(--amber); }
+#contract_countdown.final { color: var(--red); animation: pulse 1s ease-in-out infinite; }
+#contract_mark {
+    font-size: 1vh;
+    letter-spacing: 0.2em;
+    color: var(--dim);
+}
+
+#window_meter { margin: 0.9vh 0 1.1vh; }
+
+/* The decision headline: inverted filled slab for the emphatic states. */
+#decision_slab {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 1.4vh;
+    padding: 1.1vh 1.6vh;
+    margin-bottom: 1.1vh;
+    border: var(--bw) solid var(--line);
+    clip-path: polygon(
+        0 0, calc(100% - 1.4vh) 0, 100% 1.4vh,
+        100% 100%, 1.4vh 100%, 0 calc(100% - 1.4vh));
+}
+#decision_glyph { font-size: 3vh; line-height: 1; }
+#decision_label {
+    font-size: 3.6vh;
+    font-weight: 700;
+    font-stretch: 75%;
+    letter-spacing: 0.14em;
+    line-height: 1;
+}
+#decision_reason {
+    margin-left: auto;
+    text-align: right;
+    font-size: 1.15vh;
+    letter-spacing: 0.16em;
+    color: var(--label);
+}
+#decision_reason b { display: block; font-size: 1.4vh; font-weight: 600; color: var(--value-bright); }
+
+#decision_slab.state-enter_yes { border-color: rgb(var(--c)); background: rgb(var(--c)); color: var(--bg); }
+#decision_slab.state-enter_yes #decision_reason,
+#decision_slab.state-enter_yes #decision_reason b { color: var(--bg); }
+#decision_slab.state-enter_no  { border-color: var(--azure); background: var(--azure); color: var(--bg); }
+#decision_slab.state-enter_no  #decision_reason,
+#decision_slab.state-enter_no  #decision_reason b { color: var(--bg); }
+#decision_slab.state-wait      { border-color: var(--amber); color: var(--amber); }
+#decision_slab.state-no_trade  { border-color: var(--line-soft); color: var(--dim); }
+#decision_slab.state-data_hold { border-color: var(--red); color: var(--red); }
+#decision_slab.state-data_hold #decision_reason b { color: var(--red); }
+
+#contract_grid {
+    flex: 1 1 auto;
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1.2vh 1.8vh;
+    min-height: 0;
+    align-content: space-evenly;
+}
+#contract_trace {
+    flex: 0 0 auto;
+    display: flex;
+    flex-direction: column;
+    height: 12vh;
+    padding-top: 0.6vh;
+}
+#contract_trace .graph { flex: 1 1 auto; height: auto; min-height: 4vh; }
+.cell .cap {
+    font-size: 0.95vh;
+    letter-spacing: 0.2em;
+    color: var(--dim);
+    border-bottom: var(--hair) solid var(--line-faint);
+    padding-bottom: 0.2vh;
+    margin-bottom: 0.4vh;
+}
+
+.bigval {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    font-family: var(--font-mono);
+    font-size: 1.5vh;
+    color: var(--value-bright);
+}
+.bigval small { font-size: 1vh; color: var(--label); font-family: var(--font-main); letter-spacing: 0.14em; }
+
+/* -------------------------------------------------------------- asset map */
+
+#assetmap { width: 100%; height: 100%; display: block; }
+.mod-fill { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+
+/* ------------------------------------------------------------- lower band */
+
+#band { grid-area: band; display: grid; grid-template-columns: 24% 1fr 27%; gap: 1vh; min-height: 0; }
+#band > section { min-height: 0; display: flex; flex-direction: column; }
+
+/* asset matrix: compact tiles, not big cards */
+#matrix_list { display: flex; flex-direction: column; gap: 0.45vh; overflow: hidden; padding: 0.2vh; }
+.tile {
+    display: grid;
+    grid-template-columns: 3.6vh 1fr auto;
+    align-items: center;
+    gap: 0.8vh;
+    padding: 0.45vh 0.7vh;
+    border: var(--hair) solid var(--line-faint);
+    border-left: 0.28vh solid var(--line-soft);
+    background: var(--bg-raised);
+    transition: border-color .3s linear, background .3s linear;
+}
+.tile .sym { font-size: 1.35vh; font-weight: 600; letter-spacing: 0.08em; color: var(--value-bright); }
+.tile .mid { display: flex; flex-direction: column; gap: 0.2vh; min-width: 0; }
+.tile .px  { font-family: var(--font-mono); font-size: 1.05vh; color: var(--label); }
+.tile .st  { font-size: 1.05vh; letter-spacing: 0.14em; text-align: right; white-space: nowrap; }
+.tile.focus { border-left-color: rgb(var(--c)); background: rgba(var(--c), 0.07); }
+.tile.state-enter_yes { border-left-color: rgb(var(--c)); box-shadow: inset 0 0 0 var(--hair) rgba(var(--c), 0.55); }
+.tile.state-enter_no  { border-left-color: var(--azure); box-shadow: inset 0 0 0 var(--hair) rgba(110, 168, 255, 0.55); }
+.tile.state-wait      { border-left-color: var(--amber); }
+.tile.state-data_hold { border-left-color: var(--red); }
+.tile.state-no_trade  { border-left-color: var(--line-faint); }
+
+/* event stream */
+#stream_list {
+    flex: 1 1 auto;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column-reverse;
+    justify-content: flex-end;
+    font-family: var(--font-mono);
+    font-size: 1.08vh;
+    letter-spacing: 0;
+    padding: 0 0.4vh;
+}
+.ev { display: grid; grid-template-columns: 6.5vh 6vh 7vh 1fr; gap: 0.7vh; padding: 0.1vh 0; white-space: nowrap; }
+.ev .t { color: var(--dim); }
+.ev .s { letter-spacing: 0.08em; }
+.ev .o { color: var(--label); }
+.ev .m { overflow: hidden; text-overflow: ellipsis; }
+.ev.sev-INFO     .s { color: var(--dim); }
+.ev.sev-NOTICE   .s { color: rgb(var(--c)); }
+.ev.sev-ACTION   .s { color: var(--value-bright); font-weight: 700; }
+.ev.sev-WARNING  .s { color: var(--amber); }
+.ev.sev-CRITICAL .s { color: var(--red); font-weight: 700; }
+.ev.fresh { animation: evin .4s ease-out; }
+@keyframes evin { from { opacity: 0; transform: translateX(-1vh); } to { opacity: 1; transform: none; } }
+
+#cursor { display: inline-block; width: 0.9vh; height: 1.2vh; background: rgb(var(--c)); vertical-align: text-bottom; animation: blink 1.06s steps(1) infinite; }
+@keyframes blink { 0%, 50% { opacity: 1; } 50.01%, 100% { opacity: 0; } }
+
+/* forward validation */
+.split-cap {
+    font-size: 0.95vh;
+    letter-spacing: 0.2em;
+    color: rgb(var(--c));
+    display: flex;
+    justify-content: space-between;
+    padding: 0.4vh 0.7vh 0.2vh;
+    border-bottom: var(--hair) solid var(--line-faint);
+}
+.split-cap span:last-child { color: var(--dim); }
+.never { font-size: 0.9vh; letter-spacing: 0.2em; color: var(--dim); padding: 0.4vh 0.7vh; }
+
+/* ------------------------------------------------------------ demo / error */
+
+#demo_band {
+    position: fixed;
+    top: 0; left: 0; right: 0;
+    z-index: 8500;
+    text-align: center;
+    font-size: 1.05vh;
+    letter-spacing: 0.4em;
+    font-weight: 700;
+    padding: 0.28vh;
+    background: var(--amber);
+    color: var(--bg);
+}
+body:not(.demo) #demo_band { display: none; }
+
+#error_block {
+    border: var(--bw) solid var(--red);
+    padding: 0.6vh 0.9vh;
+    margin-bottom: 0.6vh;
+    font-family: var(--font-mono);
+    font-size: 1.05vh;
+    color: var(--red);
+}
+#error_block[hidden] { display: none; }
+
+#owner_line {
+    position: fixed;
+    bottom: 0.25vh;
+    left: 0;
+    right: 0;
+    text-align: center;
+    font-size: 0.85vh;
+    letter-spacing: 0.5em;
+    color: rgba(var(--c), 0.22);
+    pointer-events: none;
+    z-index: 8000;
+}
+
+#offline {
+    position: fixed;
+    inset: auto 1vh 1vh auto;
+    z-index: 9100;
+    padding: 0.5vh 1vh;
+    border: var(--bw) solid var(--red);
+    background: var(--bg);
+    color: var(--red);
+    font-size: 1.1vh;
+    letter-spacing: 0.2em;
+}
+#offline[hidden] { display: none; }

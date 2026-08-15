@@ -62,6 +62,9 @@ def build_parser():
  ap.add_argument("--forward-dir",default="data/forward")
  ap.add_argument("--manual-economics",default="config/contracts/live_economics.json")
  ui=ap.add_argument_group("presentation")
+ ui.add_argument("--ui",choices=["web","terminal"],default=None,help="command center shell: 'web' (default, eDEX-style) or 'terminal' (Rich)")
+ ui.add_argument("--no-browser",action="store_true",help="start the web shell but do not open a window (print the URL)")
+ ui.add_argument("--port",type=int,default=None,metavar="N",help="port for the web shell (default: an OS-chosen free port)")
  ui.add_argument("--no-ui",action="store_true",help="plain console output instead of the command center")
  ui.add_argument("--no-audio",action="store_true",help="disable alert tones")
  ui.add_argument("--no-voice",action="store_true",help="disable spoken announcements")
@@ -72,6 +75,33 @@ def build_parser():
  modes.add_argument("--test-alerts",action="store_true",help="preview every alert tone and announcement, then exit")
  modes.add_argument("--demo",action="store_true",help="run the interface on synthetic states, clearly labelled")
  return ap
+
+# ---------------------------------------------------------------------------
+# Web shell. Read-only: the browser receives snapshots and can send nothing.
+# ---------------------------------------------------------------------------
+
+def _start_web(state,ui_config,root):
+ """Serve the command center and open it. Never fatal; returns the server."""
+ from mantis_v4.ui.webserver import CommandCenterServer
+ from mantis_v4.ui import webshell
+ try:
+  server=CommandCenterServer(state,ui_config).start()
+ except Exception as exc:
+  # Presentation is deliberately subordinate to scanning and persistence.
+  # A missing port, broken renderer, or failed browser must never stop the
+  # observation loop that owns the validated Phase 6-8 behavior.
+  print(f"WEB INTERFACE DISABLED: {type(exc).__name__}: {exc}")
+  return None
+ print(f"MANTIS COMMAND CENTER  {server.url}")
+ if ui_config.web_open_browser:
+  profile=root/"data"/"ui-profile"
+  process=webshell.launch(server.url,profile_dir=profile,fullscreen=ui_config.web_fullscreen)
+  if process is None:
+   print("No Chromium-family browser found (Edge/Chrome/Brave).")
+   print(f"Open this address manually: {server.url}")
+ else:
+  print("Browser launch suppressed (--no-browser). Open the address above.")
+ return server
 
 # ---------------------------------------------------------------------------
 # Safe modes
@@ -86,33 +116,58 @@ def run_test_alerts(ui_config):
  return 0
 
 def run_demo(ui_config,cfg,args):
- """Synthetic command center. Structurally cannot reach the forward logs."""
+ """Synthetic command center. Structurally cannot reach the forward logs.
+
+ A full visual showcase: the feed walks every decision state, and the runner
+ cycles the surrounding system states -- provider health, economics
+ availability, contract rollover and resolution -- so each visual treatment can
+ be inspected without waiting for the market to produce it.
+ """
  from mantis_v4.ui import AlertRouter,CommandCenter,CommandCenterState,build_audio,build_voice
- from mantis_v4.ui.demo import DemoFeed,DEMO_FORWARD_REPORT,DEMO_HISTORICAL,emit_demo_events
+ from mantis_v4.ui.demo import (DemoFeed,DEMO_FORWARD_REPORT,DEMO_HISTORICAL,
+  emit_demo_events,emit_demo_lifecycle,demo_provider_state)
  ui_config.demo_mode=True
+ root=Path(__file__).resolve().parent
  assets=cfg.active_assets; state=CommandCenterState(assets,ui_config)
  state.set_status(demo_mode=True,run_id="DEMO",software_version="DEMO",model_version="DEMO_NORMAL_Z",
   policy_name="H_p0.95_l0.90_f50_d.05_t300",underlying_provider="synthetic",underlying_state="LIVE",
   webull_status="AUTH_NOT_CONFIGURED",economics_status="DISABLED",audio_enabled=ui_config.audio_enabled,
-  voice_enabled=ui_config.voice_enabled,latency_seconds=0.0)
+  voice_enabled=ui_config.voice_enabled,latency_seconds=0.0,started_at=datetime.now(UTC),
+  git_commit="DEMO",config_hash="DEMO")
  state.set_forward(DEMO_FORWARD_REPORT,DEMO_HISTORICAL)
+ state.log("INFO","SYSTEM","MANTIS ONLINE","demo / synthetic data")
  audio=build_audio(ui_config); voice=build_voice(ui_config); bus=EventBus()
  AlertRouter(state,audio,voice,ui_config).attach(bus)
- center=CommandCenter(state,ui_config,local_timezone=cfg.contract_timezone)
- feed=DemoFeed(assets)
- if not args.once: center.start()
+
+ web=ui_config.ui_mode=="web" and ui_config.ui_enabled and not args.once
+ server=None; center=None
+ if web:
+  server=_start_web(state,ui_config,root)
+ else:
+  center=CommandCenter(state,ui_config,local_timezone=cfg.contract_timezone)
+  if not args.once: center.start()
+
+ feed=DemoFeed(assets); tick=0
  try:
   while True:
    snapshots=feed.snapshots()
    for snapshot in snapshots: state.update_from_snapshot(snapshot,synthetic=True)
    emit_demo_events(bus,snapshots)
-   state.record_scan()
+   emit_demo_lifecycle(bus,snapshots,tick)
+   provider,detail=demo_provider_state(tick)
+   state.record_scan(underlying_state=provider,underlying_detail=detail,
+    underlying_last_success=datetime.now(UTC),underlying_successes=tick*len(assets),
+    latency_seconds=0.18+0.22*((tick%7)/7.0))
+   tick+=1
    if args.once: break
    time.sleep(cfg.scan_interval_seconds)
  except KeyboardInterrupt: pass
  finally:
-  if args.once: center.render_once()
-  center.stop(); audio.stop(); voice.stop()
+  if center is not None:
+   if args.once: center.render_once()
+   center.stop()
+  if server is not None: server.stop()
+  audio.stop(); voice.stop()
  return 0
 
 # ---------------------------------------------------------------------------
@@ -154,7 +209,10 @@ def main():
   audio_enabled=ui_config.audio_enabled,voice_enabled=ui_config.voice_enabled)
 
  console=build_console(ui_config); graphical=ui_config.ui_enabled and not args.no_ui
- if ui_config.startup_animation:
+ # The web shell runs its own boot sequence in the browser, so the terminal
+ # startup animation would only duplicate it.
+ web=graphical and ui_config.ui_mode=="web" and not args.once
+ if ui_config.startup_animation and not web:
   checks=ui_startup.build_checks(model_version=engine.config.model_version,
    policy_name=engine.policy.classification.name,provider_state="READY",
    webull_status=webull.status,economics_status="ACTIVE" if manual.status=="AVAILABLE" else "DISABLED",
@@ -164,8 +222,10 @@ def main():
   else:
    for line in ui_startup.plain_lines(checks): print(line)
 
- center=None
- if graphical:
+ center=None; server=None
+ if web:
+  server=_start_web(state,ui_config,root)
+ elif graphical:
   center=CommandCenter(state,ui_config,console=console,local_timezone=cfg.contract_timezone)
   # A single scan prints one frame instead of taking over the screen.
   if not args.once: center.start()
@@ -222,6 +282,7 @@ def main():
   if center is not None:
    if args.once: center.render_once()
    center.stop()
+  if server is not None: server.stop()
   audio.stop(); voice.stop()
   if center is not None and center.disabled_reason:
    print(f"INTERFACE DISABLED: {center.disabled_reason}")

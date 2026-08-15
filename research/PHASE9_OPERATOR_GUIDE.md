@@ -37,17 +37,25 @@ python -m pip install -r requirements.txt
 
 This takes a minute or two and prints a lot. `Successfully installed …` at the end means it worked.
 
-**4. Make the window big.**
-
-The command center wants at least **96 columns × 30 rows**, and looks best full-screen on a 1920×1080 display. Maximise the PowerShell window. If the text is large, press `Ctrl` and `-` a few times to shrink it. If the window is too small MANTIS tells you the current and required size instead of crashing.
-
-**5. Start it.**
+**4. Start it.**
 
 ```powershell
 python mantis_v4_live.py
 ```
 
-You get the initialization sequence, then the full command center. It refreshes continuously.
+MANTIS opens its own immersive window. Startup now takes about fifteen seconds: monochrome SAAF Holdings Group, SAAF Ventures, and MANTIS identities are reconstructed in sequence; the verified identity chain hands off to the SHG/MANTIS technical boot; then the center shell and telemetry modules assemble before the command center becomes live. The PowerShell window stays behind it running the scanner — you can ignore it, but do not close it, because that is the process doing the actual work.
+
+On Windows the launcher asks Chromium for kiosk, start-fullscreen, and start-maximized modes. Edge also receives its fullscreen kiosk flag. These are the strongest command-line controls Chromium exposes, but Windows/browser policy can still choose maximized rather than exclusive fullscreen. On the first click or keypress MANTIS also requests the browser Fullscreen API; browsers require that user gesture by design.
+
+The window is a Chromium app window driven by Edge (or Chrome, or Brave — whichever it finds first). Nothing is installed for this: Edge already ships with Windows. If none is found, MANTIS prints the address and keeps scanning, and you can open it yourself in any browser.
+
+**5. If you would rather stay in the terminal.**
+
+```powershell
+python mantis_v4_live.py --ui terminal
+```
+
+That gives the Rich text dashboard instead. It wants at least **96 columns × 30 rows** and looks best maximised; below that it tells you the current and required size rather than crashing.
 
 **6. Stop it.**
 
@@ -93,7 +101,10 @@ Runs a single scan, prints one frame, and stops.
 
 | Flag | Effect |
 |---|---|
-| *(none)* | full command center, continuous |
+| *(none)* | full command center in its own window, continuous |
+| `--ui terminal` | the Rich text dashboard instead of the window |
+| `--no-browser` | run the shell but do not open a window; prints the address |
+| `--port N` | serve the shell on a fixed port instead of a free one |
 | `--once` | one scan, print one frame, exit |
 | `--no-ui` | plain text output instead of the command center |
 | `--no-audio` | no alert tones |
@@ -107,6 +118,8 @@ Runs a single scan, prints one frame, and stops.
 | `--manual-economics PATH` | verified manual contract economics file |
 
 Combine freely: `python mantis_v4_live.py --no-voice --diagnostics`.
+
+During the cinematic prelude and boot, operational alert tones and speech are gated. Events are still logged immediately, but asset names, entry sides, data-hold messages, and resolution speech cannot interrupt the startup soundtrack. The default gate is sixteen seconds; if you configure a longer boot, MANTIS automatically keeps the gate through the boot plus one second. `STARTUP_ALERT_SUPPRESSION_SECONDS` can extend it further, and `--no-startup` removes the gate.
 
 ---
 
@@ -138,10 +151,16 @@ Every setting has an environment variable: the name in capitals with `MANTIS_UI_
 ### All presentation settings
 
 ```text
-UI_ENABLED                   UI_REFRESH_RATE              STARTUP_ANIMATION
-SHOW_ADVANCED_DIAGNOSTICS    DEFAULT_FOCUSED_ASSET        EVENT_LOG_LENGTH
-EVENT_LOG_VISIBLE_ROWS       MINIMUM_TERMINAL_WIDTH       MINIMUM_TERMINAL_HEIGHT
-SHOW_FORWARD_VALIDATION      FORWARD_REPORT_INTERVAL_SECONDS
+UI_ENABLED                   UI_MODE                      UI_REFRESH_RATE
+STARTUP_ANIMATION            SHOW_ADVANCED_DIAGNOSTICS    DEFAULT_FOCUSED_ASSET
+EVENT_LOG_LENGTH             EVENT_LOG_VISIBLE_ROWS       MINIMUM_TERMINAL_WIDTH
+MINIMUM_TERMINAL_HEIGHT      SHOW_FORWARD_VALIDATION      FORWARD_REPORT_INTERVAL_SECONDS
+
+WEB_HOST                     WEB_PORT                     WEB_OPEN_BROWSER
+WEB_FULLSCREEN               SCANLINES_ENABLED            BACKGROUND_GRID_ENABLED
+
+BOOT_SEQUENCE_ENABLED        BOOT_DURATION                BOOT_AUDIO_ENABLED
+STARTUP_ALERT_SUPPRESSION_SECONDS
 
 AUDIO_ENABLED                MASTER_VOLUME                AUDIO_MIN_INTERVAL_SECONDS
 AUDIO_ENTER_YES              AUDIO_ENTER_NO               AUDIO_WAIT
@@ -161,7 +180,11 @@ Precedence, later wins: defaults → `config/mantis_v4.ui.json` → environment 
 
 ## 5. Reading the screen
 
-Start at the big panel on the left. It tells you the one thing that matters right now:
+The window has four regions. The **left rail** is the system: clock, MANTIS identity, the data engine, live telemetry traces, host process. The **centre** is the workspace, and it is where you look first. The **right rail** is the market plumbing: contract economics, provider network, connectivity map. The **band along the bottom** is the asset matrix, the event stream, and forward validation.
+
+The centre has four tabs — `ACTIVE CONTRACT`, `SURVEILLANCE`, `FORWARD`, `DIAGNOSTICS`. Click them, or press `1` `2` `3` `4`.
+
+On `ACTIVE CONTRACT`, the wide slab across the middle tells you the one thing that matters right now:
 
 | What you see | What it means |
 |---|---|
@@ -175,7 +198,7 @@ The line under the decision is always the reason. `CONFIDENCE BELOW THRESHOLD`, 
 
 The big `T-04:37` is time left in the current 15-minute contract, counted against the contract's own resolution timestamp. It turns amber under two minutes and red under thirty seconds. Those are emphasis marks, not promises about what happens at those moments.
 
-The five cards along the middle are the other assets. The one with a `◆` beside its name is the one shown in the big panel.
+The asset matrix at the bottom left is the other assets. The highlighted tile is the one shown in the centre.
 
 **Colour is never the only signal.** Every state also has its own word, its own glyph, and its own border style, so the screen still reads correctly in a screenshot, in monochrome, or if you are colour-blind.
 
@@ -258,7 +281,10 @@ The complete technical detail goes to `data/logs/mantis_ui_diagnostics.log`. Set
 
 | Symptom | What it means | What to do |
 |---|---|---|
-| `TERMINAL TOO SMALL` | window under 96×30 | maximise the window, or `Ctrl` `-` to shrink the font, or run `--no-ui` |
+| no window opened | no Edge/Chrome/Brave found | MANTIS printed an address — open it in any browser, or use `--ui terminal` |
+| `LINK LOST` in the corner | the browser lost the event stream | the scanner is unaffected and still recording; reload the window |
+| no sound in the window | Chromium blocks audio until you interact | click once inside the window |
+| `TERMINAL TOO SMALL` | terminal shell under 96×30 | maximise the window, or `Ctrl` `-` to shrink the font, or run `--no-ui` |
 | one asset stuck on `DATA HOLD` | no fresh bars for that asset | usually transient; it clears itself. The other four keep scanning |
 | all assets on `DATA HOLD` | the market-data provider is down | check your internet; MANTIS keeps retrying |
 | `PROVIDER DEGRADED` in the log | the provider is retrying or serving cache | informational; it recovers on its own |

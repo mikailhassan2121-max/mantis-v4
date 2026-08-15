@@ -167,6 +167,43 @@ def emit_demo_events(bus: EventBus, snapshots: list[LiveSnapshot]) -> None:
             bus.emit(AppEvent(EventType.WAIT, snapshot.timestamp_utc, payload))
 
 
+def emit_demo_lifecycle(bus: EventBus, snapshots: list[LiveSnapshot], tick: int) -> None:
+    """Cycle the surrounding system events so every treatment can be seen.
+
+    Contract rollover and resolution are ordinarily minutes apart; the showcase
+    produces them on a short cycle. Payloads stay marked synthetic and the bus
+    still has no persistence, so none of this can reach the forward store.
+    """
+    if not snapshots:
+        return
+    if tick and tick % 12 == 0:
+        first = snapshots[0]
+        bus.emit(AppEvent(EventType.ROLLOVER, first.timestamp_utc,
+                          {"synthetic": True, "asset": first.asset,
+                           "to": first.contract_id, "reason": "CONTRACT_ROLLOVER"}))
+    if tick and tick % 7 == 0:
+        subject = snapshots[tick % len(snapshots)]
+        bus.emit(AppEvent(EventType.RESOLUTION, subject.timestamp_utc,
+                          {"synthetic": True, "asset": subject.asset,
+                           "winning_side": subject.predicted_side,
+                           "classification_correct": (tick // 7) % 4 != 0,
+                           "resolution_verification_status": "PROXY_RESOLUTION"}))
+
+
+# Provider health walks LIVE -> DEGRADED -> LIVE so the degraded treatment and
+# its warning routing are both visible without breaking anything.
+DEMO_PROVIDER_CYCLE = (
+    ("LIVE", ""), ("LIVE", ""), ("LIVE", ""), ("LIVE", ""), ("LIVE", ""),
+    ("DEGRADED", "SYNTHETIC PROVIDER DEGRADATION"),
+    ("DEGRADED", "SYNTHETIC PROVIDER DEGRADATION"),
+    ("LIVE", ""), ("LIVE", ""), ("LIVE", ""),
+)
+
+
+def demo_provider_state(tick: int) -> tuple[str, str]:
+    return DEMO_PROVIDER_CYCLE[tick % len(DEMO_PROVIDER_CYCLE)]
+
+
 DEMO_FORWARD_REPORT = {
     "total_contracts_observed": 96, "total_entry_events": 61, "resolved_entries": 58,
     "abstention_rate": 0.364, "sample_label": "SMALL SAMPLE (SYNTHETIC)",

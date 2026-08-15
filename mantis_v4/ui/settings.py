@@ -47,8 +47,23 @@ class PresentationConfig:
 
     # -- interface ----------------------------------------------------------
     ui_enabled: bool = True
+    ui_mode: str = "web"                    # "web" (eDEX-style shell) or "terminal" (Rich)
     ui_refresh_rate: float = 4.0            # renders per second (countdown smoothness)
     startup_animation: bool = True
+
+    # -- web shell ----------------------------------------------------------
+    web_host: str = "127.0.0.1"             # never bind a routable interface
+    web_port: int = 0                       # 0 = let the OS choose a free port
+    web_open_browser: bool = True           # launch Edge/Chrome in app mode
+    web_fullscreen: bool = True
+    scanlines_enabled: bool = True
+    background_grid_enabled: bool = True
+
+    # -- boot sequence ------------------------------------------------------
+    boot_sequence_enabled: bool = True
+    boot_duration: float = 15.0             # cinematic prelude + boot + shell assembly
+    boot_audio_enabled: bool = True
+    startup_alert_suppression_seconds: float = 16.0  # gate operational tones/speech
     show_advanced_diagnostics: bool = False
     default_focused_asset: str = "BTC-USD"
     event_log_length: int = 200             # in-memory cap; disk logs stay append-only
@@ -185,6 +200,14 @@ class PresentationConfig:
             raise ValueError("voice_volume must be between 0 and 100")
         if self.minimum_terminal_width < 40 or self.minimum_terminal_height < 10:
             raise ValueError("minimum terminal dimensions are unusably small")
+        if self.ui_mode not in ("web", "terminal"):
+            raise ValueError("ui_mode must be 'web' or 'terminal'")
+        if not 0 <= self.web_port <= 65535:
+            raise ValueError("web_port must be between 0 and 65535")
+        if not 0.0 <= self.boot_duration <= 30.0:
+            raise ValueError("boot_duration must be between 0 and 30 seconds")
+        if not 0.0 <= self.startup_alert_suppression_seconds <= 60.0:
+            raise ValueError("startup_alert_suppression_seconds must be between 0 and 60 seconds")
         return self
 
     def apply_cli(self, args: Any) -> "PresentationConfig":
@@ -199,8 +222,16 @@ class PresentationConfig:
             self.show_advanced_diagnostics = True
         if getattr(args, "no_startup", False):
             self.startup_animation = False
+            self.boot_sequence_enabled = False
+            self.startup_alert_suppression_seconds = 0.0
         if getattr(args, "demo", False):
             self.demo_mode = True
+        if getattr(args, "ui", None):
+            self.ui_mode = args.ui
+        if getattr(args, "no_browser", False):
+            self.web_open_browser = False
+        if getattr(args, "port", None):
+            self.web_port = int(args.port)
         if getattr(args, "focus", None):
             self.default_focused_asset = args.focus
         return self.validate()
