@@ -89,7 +89,7 @@ def build_parser():
 # Web shell. Read-only: the browser receives snapshots and can send nothing.
 # ---------------------------------------------------------------------------
 
-def _start_web(state,ui_config,root):
+def _start_web(state,ui_config,root,on_ready=None):
  """Serve the command center and open it. Never fatal; returns the server."""
  from mantis_v4.ui.webserver import CommandCenterServer
  from mantis_v4.ui import webshell
@@ -102,6 +102,7 @@ def _start_web(state,ui_config,root):
   print(f"WEB INTERFACE DISABLED: {type(exc).__name__}: {exc}")
   return None
  print(f"MANTIS COMMAND CENTER  {server.url}")
+ server.on_presentation_ready=on_ready
  state.set_status(http_server_status="LIVE")
  if ui_config.web_open_browser:
   profile=root/"data"/"ui-profile"
@@ -150,18 +151,29 @@ def run_demo(ui_config,cfg,args):
  state.set_forward(DEMO_FORWARD_REPORT,DEMO_HISTORICAL)
  state.log("INFO","SYSTEM","MANTIS ONLINE","demo / synthetic data")
  audio=build_audio(ui_config); voice=build_voice(ui_config); bus=EventBus()
- AlertRouter(state,audio,voice,ui_config).attach(bus)
+ router=AlertRouter(state,audio,voice,ui_config).attach(bus)
 
  web=ui_config.ui_mode=="web" and ui_config.ui_enabled and not args.once
  server=None; center=None
  if web:
-  server=_start_web(state,ui_config,root)
+  server=_start_web(state,ui_config,root,on_ready=router.arm)
  else:
   center=CommandCenter(state,ui_config,local_timezone=cfg.contract_timezone)
   if not args.once: center.start()
 
  feed=DemoFeed(assets); tick=0
  try:
+  if server is not None and ui_config.web_open_browser and getattr(server,"browser_process",None) is not None:
+   # The browser owns presentation READY. Synthetic state remains still while
+   # logos and the hidden hydration pass run.
+   maximum=(ui_config.brand_prelude_duration_seconds+
+    ui_config.technical_boot_duration_seconds+ui_config.startup_snapshot_timeout_seconds+
+    ui_config.startup_settle_seconds+5.0)
+   server.presentation_ready.wait(maximum)
+  else:
+   router.arm(announce=False)
+  if not args.once and ui_config.demo_ready_delay_seconds:
+   time.sleep(ui_config.demo_ready_delay_seconds)
   while True:
    snapshots=feed.snapshots()
    for snapshot in snapshots: state.update_from_snapshot(snapshot,synthetic=True)
@@ -265,7 +277,7 @@ def main():
 
  center=None; server=None
  if web:
-  server=_start_web(state,ui_config,root)
+  server=_start_web(state,ui_config,root,on_ready=router.arm)
  elif graphical:
   center=CommandCenter(state,ui_config,console=console,local_timezone=cfg.contract_timezone)
   # A single scan prints one frame instead of taking over the screen.
@@ -273,6 +285,11 @@ def main():
  else:
   print("MODE: OBSERVATION_ONLY | NO AUTOMATED EXECUTION")
   print("WEBULL_STATUS = "+webull.status)
+
+ if not web or server is None:
+  # Terminal/plain modes complete startup synchronously. A failed browser
+  # presentation must not leave alerts permanently disarmed.
+  router.arm(announce=not args.once)
 
  reporter=_start_forward_reporter(store,state,ui_config)
  state.set_status(forward_logger_status="LIVE" if reporter is not None else "DISABLED")

@@ -17,12 +17,14 @@ web front end must not add an install step for the operator.
 from __future__ import annotations
 
 import json
+import secrets
 import threading
 import time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Optional
+from urllib.parse import parse_qs, urlsplit
 
 from . import webmodel
 
@@ -30,10 +32,11 @@ UTC = timezone.utc
 
 WEB_ROOT = Path(__file__).resolve().parent / "web"
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-BRANDING_ROOT = next((p for p in (
+BRANDING_ROOTS = tuple(p for p in (
     PROJECT_ROOT / "assets" / "branding",
     PROJECT_ROOT / "assests" / "branding",  # supplied repository spelling
-) if p.is_dir()), PROJECT_ROOT / "assets" / "branding")
+) if p.is_dir())
+BRANDING_ROOT = BRANDING_ROOTS[0] if BRANDING_ROOTS else PROJECT_ROOT / "assets" / "branding"
 
 CONTENT_TYPES = {
     ".html": "text/html; charset=utf-8",
@@ -91,6 +94,10 @@ class CommandCenterServer:
         self._serve_thread: Optional[threading.Thread] = None
         self._push_thread: Optional[threading.Thread] = None
         self._stop = threading.Event()
+        self.presentation_ready = threading.Event()
+        self.on_presentation_ready = None
+        self._missing_branding: set[str] = set()
+        self._presentation_token = secrets.token_urlsafe(24)
         self.failures = 0
         self.disabled_reason: Optional[str] = None
 
@@ -139,8 +146,10 @@ class CommandCenterServer:
     def payload(self) -> dict:
         with self._clients_lock:
             clients = len(self._clients)
-        return webmodel.snapshot_payload(self.state.snapshot(), self.config,
-                                         datetime.now(UTC), clients)
+        payload = webmodel.snapshot_payload(self.state.snapshot(), self.config,
+                                            datetime.now(UTC), clients)
+        payload["presentation"]["ready_token"] = self._presentation_token
+        return payload
 
     def frame(self) -> str:
         return json.dumps(self.payload(), default=str, separators=(",", ":"))
@@ -158,6 +167,17 @@ class CommandCenterServer:
         client.event.set()
         with self._clients_lock:
             self._clients.discard(client)
+
+    def mark_presentation_ready(self) -> None:
+        """Arm presentation-only consumers once, never scanner/quant state."""
+        if self.presentation_ready.is_set():
+            return
+        self.presentation_ready.set()
+        if self.on_presentation_ready is not None:
+            try:
+                self.on_presentation_ready()
+            except Exception:
+                pass
 
     def _push_loop(self) -> None:
         """Snapshot on the UI cadence and fan out to whoever is listening.
@@ -209,14 +229,22 @@ class CommandCenterServer:
 
     def read_branding(self, relative: str) -> Optional[tuple[bytes, str]]:
         """Read one supplied branding image without exposing the repository."""
-        target = (BRANDING_ROOT / relative.lstrip("/")).resolve()
-        try:
-            target.relative_to(BRANDING_ROOT.resolve())
-        except ValueError:
-            return None
-        if not target.is_file() or target.suffix.lower() != ".png":
-            return None
-        return target.read_bytes(), "image/png"
+        name = Path(relative).name
+        for root in BRANDING_ROOTS or (BRANDING_ROOT,):
+            target = (root / relative.lstrip("/")).resolve()
+            try:
+                target.relative_to(root.resolve())
+            except ValueError:
+                return None
+            if target.is_file() and target.suffix.lower() == ".png":
+                return target.read_bytes(), "image/png"
+        if name not in self._missing_branding:
+            self._missing_branding.add(name)
+            try:
+                self.state.log("WARNING", "UI", "BRANDING ASSET MISSING", name)
+            except Exception:
+                pass
+        return None
 
 
 def _make_handler(server: CommandCenterServer):
@@ -237,7 +265,8 @@ def _make_handler(server: CommandCenterServer):
             self.wfile.write(body)
 
         def do_GET(self):                      # noqa: N802  (stdlib naming)
-            route = self.path.split("?", 1)[0]
+            parsed = urlsplit(self.path)
+            route = parsed.path
             if route == "/":
                 route = "/index.html"
 
@@ -247,6 +276,16 @@ def _make_handler(server: CommandCenterServer):
             if route == "/snapshot.json":
                 self._send(server.frame().encode("utf-8"),
                            "application/json; charset=utf-8")
+                return
+            if route == "/presentation-ready":
+                # One-way presentation acknowledgement only. It cannot reach
+                # providers, scanner state, the engine, or the forward store.
+                token = parse_qs(parsed.query).get("token", [""])[0]
+                if not secrets.compare_digest(token, server._presentation_token):
+                    self._send(b"forbidden", "text/plain; charset=utf-8", status=403)
+                    return
+                server.mark_presentation_ready()
+                self._send(b"ready", "text/plain; charset=utf-8")
                 return
 
             if route.startswith("/branding/"):

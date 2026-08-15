@@ -22,7 +22,14 @@
     var state = {
         snapshot: null,
         ready: false,
+        lifecycle: "PRELOAD",
         connected: false,
+        readyPosted: false,
+        readyToken: "",
+        frameLoopStarted: false,
+        sseSnapshotsDuringBoot: 0,
+        domRendersDuringBoot: 0,
+        hydrationRenders: 0,
         serverOffsetMs: 0,
         lastDecisions: Object.create(null),
         lastContract: Object.create(null)
@@ -107,9 +114,14 @@
         return Math.max(0, (end - (Date.now() + state.serverOffsetMs)) / 1000);
     }
 
-    function draw() {
+    function draw(reason) {
         var snapshot = state.snapshot;
         if (!snapshot) return;
+        if (!state.ready && reason !== "hydration") {
+            state.domRendersDuringBoot++;
+            return;
+        }
+        if (reason === "hydration") state.hydrationRenders++;
         var view = activeView();
         var focus = M.focused(snapshot);
 
@@ -150,9 +162,9 @@
         var serverNow = Date.parse(snapshot.server_time_utc);
         if (!Number.isNaN(serverNow)) state.serverOffsetMs = serverNow - Date.now();
 
-        document.body.classList.toggle("demo", !!snapshot.demo_mode);
-        if (snapshot.presentation && snapshot.presentation.scanlines === false) {
-            document.body.classList.add("no-scanlines");
+        if (!state.ready) {
+            state.sseSnapshotsDuringBoot++;
+            return; // boot lock: cache and clock sync only; never touch the DOM
         }
 
         M.pushHistory(snapshot);
@@ -193,40 +205,148 @@
 
     /* ----------------------------------------------------------------- boot */
 
-    function start() {
-        bindTabs();
+    function structurallyComplete(snapshot) {
+        return !!(snapshot && snapshot.type === "snapshot" && snapshot.server_time_utc &&
+            snapshot.status && snapshot.branding && snapshot.presentation &&
+            Array.isArray(snapshot.assets) && snapshot.assets.length > 0 &&
+            snapshot.assets.every(function (asset) {
+                return asset && typeof asset.asset === "string" && asset.final && asset.classification;
+            }));
+    }
 
-        function requestImmersive() {
-            if (!document.fullscreenElement && document.documentElement.requestFullscreen) {
-                document.documentElement.requestFullscreen().catch(function () {});
-            }
-        }
+    function truthfulHold(snapshot) {
+        var held = JSON.parse(JSON.stringify(snapshot || {}));
+        held.type = "snapshot";
+        held.assets = (held.assets || []).map(function (asset) {
+            asset.has_data = false;
+            asset.final = { key: "data_hold", label: "DATA HOLD", glyph: "!", raw: "DATA_HOLD" };
+            asset.final_reason = "AWAITING_LIVE_MARKET_STATE";
+            asset.final_reason_text = "AWAITING LIVE MARKET STATE";
+            return asset;
+        });
+        return held;
+    }
 
-        // Prime with one snapshot so the boot sequence can hand over to a
-        // populated screen rather than an empty one.
-        fetch("/snapshot.json").then(function (r) { return r.json(); }).then(function (snapshot) {
-            var p = snapshot.presentation || {};
-            global.MANTIS_GRID = p.background_grid !== false;
-            if (p.scanlines === false) document.body.classList.add("no-scanlines");
-            A.init(p.audio_enabled !== false && p.boot_audio !== false, p.master_volume);
+    function waitForSnapshot(timeoutSeconds, bypass) {
+        if (bypass || structurallyComplete(state.snapshot)) return Promise.resolve(true);
+        state.lifecycle = "HYDRATING";
+        return new Promise(function (resolve) {
+            var deadline = Date.now() + Math.max(1000, timeoutSeconds * 1000);
+            var timer = global.setInterval(function () {
+                if (structurallyComplete(state.snapshot)) {
+                    global.clearInterval(timer); resolve(true);
+                } else if (Date.now() >= deadline) {
+                    global.clearInterval(timer); resolve(false);
+                }
+            }, 50);
+        });
+    }
 
-            state.snapshot = snapshot;
+    function hydrate(timeoutSeconds, bypass) {
+        return waitForSnapshot(timeoutSeconds, bypass).then(function (complete) {
+            diagnostic("SNAPSHOT_READY", complete ? "complete" : "timeout-data-hold");
+            if (!complete) state.snapshot = truthfulHold(state.snapshot);
+            var snapshot = state.snapshot;
+            if (!snapshot) return;
             var serverNow = Date.parse(snapshot.server_time_utc);
             if (!Number.isNaN(serverNow)) state.serverOffsetMs = serverNow - Date.now();
-            M.pushHistory(snapshot);
+            state.lastDecisions = Object.create(null);
+            state.lastContract = Object.create(null);
             (snapshot.assets || []).forEach(function (v) {
                 state.lastDecisions[v.asset] = v.final.key;
                 state.lastContract[v.asset] = v.contract_id;
             });
+            return waitForViewportStable().then(function () {
+                document.body.classList.toggle("demo", !!snapshot.demo_mode);
+                if (snapshot.presentation && snapshot.presentation.scanlines === false) {
+                    document.body.classList.add("no-scanlines");
+                }
+                M.pushHistory(snapshot);
+                draw("hydration");
+                M.renderStream(snapshot, snapshot.presentation
+                    ? snapshot.presentation.event_log_rows + 6 : 14);
+                diagnostic("HYDRATION_RENDER", "renders=" + state.hydrationRenders);
+            });
+        });
+    }
+
+    function waitForViewportStable() {
+        return new Promise(function (resolve) {
+            var finished = false;
+            var stableTimer;
+            var maximum = global.setTimeout(finish, 1000);
+            function finish() {
+                if (finished) return;
+                finished = true;
+                global.clearTimeout(maximum);
+                global.clearTimeout(stableTimer);
+                global.removeEventListener("resize", changed);
+                diagnostic("VIEWPORT_STABLE", global.innerWidth + "x" + global.innerHeight);
+                resolve();
+            }
+            function changed() {
+                global.clearTimeout(stableTimer);
+                stableTimer = global.setTimeout(finish, 180);
+            }
+            global.addEventListener("resize", changed, { passive: true });
+            changed();
+        });
+    }
+
+    var diagnosticsEnabled = new URLSearchParams(global.location.search).get("startupDiagnostics") === "1";
+    function diagnostic(name, detail) {
+        if (!diagnosticsEnabled) return;
+        console.info("MANTIS_STARTUP", Math.round(performance.now()), name, detail || "");
+    }
+    global.addEventListener("mantis:startup-mark", function (event) {
+        diagnostic(event.detail.name, event.detail.detail);
+    });
+
+    function postReady() {
+        if (state.readyPosted) return;
+        state.readyPosted = true;
+        fetch("/presentation-ready?token=" + encodeURIComponent(state.readyToken),
+              { cache: "no-store" }).catch(function () {});
+    }
+
+    function start() {
+        bindTabs();
+
+        diagnostic("BROWSER_PAGE_LOADED");
+
+        // Prime with one snapshot so the boot sequence can hand over to a
+        // populated screen rather than an empty one.
+        fetch("/snapshot.json").then(function (r) { return r.json(); }).then(function (snapshot) {
+            diagnostic("SERVER_READY");
+            var p = snapshot.presentation || {};
+            state.readyToken = p.ready_token || "";
+            global.MANTIS_GRID = p.background_grid !== false;
+            if (p.scanlines === false) document.body.classList.add("no-scanlines");
+            A.init(p.audio_enabled !== false && p.boot_audio !== false, p.master_volume);
+
+            apply(snapshot);
+            connect(); // cache every SSE frame while the opaque boot lock is held
 
             return global.MantisBoot.run({
                 enabled: p.boot_enabled !== false,
-                duration: p.boot_duration || 15.0,
+                brandPreludeEnabled: p.brand_prelude_enabled !== false,
+                brandPreludeDuration: p.brand_prelude_duration_seconds || 13.0,
+                technicalDuration: p.technical_boot_duration_seconds || 8.5,
+                settleSeconds: p.boot_enabled === false ? 0 : (p.startup_settle_seconds || 0.75),
+                onHydrate: function (bypass) {
+                    return hydrate(p.startup_snapshot_timeout_seconds || 7.0, !!bypass);
+                },
                 onReady: function () {
+                    state.lifecycle = "READY";
                     state.ready = true;
-                    draw();
-                    M.renderStream(snapshot, 14);
-                    connect();
+                    if (!state.frameLoopStarted) {
+                        state.frameLoopStarted = true;
+                        global.requestAnimationFrame(tick);
+                    }
+                    diagnostic("READY", "sse=" + state.sseSnapshotsDuringBoot +
+                        " prehydrateDom=" + state.domRendersDuringBoot +
+                        " hydration=" + state.hydrationRenders);
+                    postReady();
                 }
             });
         }).catch(function () {
@@ -240,16 +360,13 @@
             connect();
         });
 
-        // Chromium suspends an AudioContext created before any gesture; resume
-        // on the first interaction so a click or key press restores sound.
-        ["click", "keydown"].forEach(function (name) {
+        // Chromium suspends an AudioContext created before a gesture. Resume
+        // audio only; fullscreen is owned by the single hardened browser launch.
+        ["pointerdown", "keydown"].forEach(function (name) {
             global.addEventListener(name, function () {
                 A.resume();
-                requestImmersive();
             }, { once: true });
         });
-
-        global.requestAnimationFrame(tick);
     }
 
     if (document.readyState === "loading") {
@@ -257,4 +374,10 @@
     } else {
         start();
     }
+
+    global.MantisAppLifecycle = {
+        state: state,
+        structurallyComplete: structurallyComplete,
+        truthfulHold: truthfulHold
+    };
 })(window);

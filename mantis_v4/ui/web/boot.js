@@ -1,8 +1,7 @@
 /* SHG / MANTIS boot sequence.
  *
- * Choreography follows the cadence measured from eDEX-UI and recorded in
- * research/PHASE9_EDEX_RESEARCH.md: a forged monochrome identity chain, an
- * uneven kernel-log burst, a large derezz handoff, then an interface that
+ * A quiet OEM-style identity prelude precedes the eDEX-inspired technical
+ * boot: three monochrome marks on black, an uneven kernel-log burst, then an interface that
  * assembles itself module by module with one sound per module.
  *
  * The identity order is deliberate and is the one branding change that matters:
@@ -24,42 +23,88 @@
     function delay(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
 
     var BRANDING = [
-        { image: "/branding/saaf_holdings_group.png", name: "SAAF HOLDINGS GROUP",
+        { image: "/branding/processed/saaf_holdings_group.png", name: "SAAF HOLDINGS GROUP", key: "shg",
           role: "STRATEGIC UMBRELLA // IDENTITY 01", cue: "shg_boot", wide: true },
-        { image: "/branding/saaf_ventures.png", name: "SAAF VENTURES",
+        { image: "/branding/processed/saaf_ventures.png", name: "SAAF VENTURES", key: "ventures",
           role: "VENTURE SYSTEMS // IDENTITY 02", cue: "panel_online", wide: true },
-        { image: "/branding/mantis_darpa.png", name: "MANTIS",
+        { image: "/branding/processed/mantis_darpa.png", name: "MANTIS", key: "mantis",
           role: "OPERATIONAL INTELLIGENCE // IDENTITY 03", cue: "init_pulse", wide: false }
     ];
 
     function setPhase(screen, phase) {
         screen.dataset.phase = phase;
+        document.body.classList.toggle("brand-prelude", phase === "prelude");
         global.dispatchEvent(new CustomEvent("mantis:boot-phase", { detail: phase }));
     }
 
-    async function brandPrelude(screen, scale) {
+    function mark(name, detail) {
+        global.dispatchEvent(new CustomEvent("mantis:startup-mark", {
+            detail: { name: name, detail: detail || "", at: performance.now() }
+        }));
+    }
+
+    function withTimeout(promise, milliseconds) {
+        return Promise.race([promise, delay(milliseconds).then(function () { return false; })]);
+    }
+
+    async function preloadBranding() {
+        var jobs = BRANDING.map(function (brand) {
+            var candidate = new Image();
+            brand.available = false;
+            return new Promise(function (resolve) {
+                candidate.onload = function () {
+                    var decoded = candidate.decode ? candidate.decode().catch(function () {}) : Promise.resolve();
+                    decoded.then(function () { brand.available = true; resolve(true); });
+                };
+                candidate.onerror = function () { resolve(false); };
+                candidate.src = brand.image;
+            });
+        });
+        var fonts = document.fonts && document.fonts.ready ? document.fonts.ready : Promise.resolve();
+        await withTimeout(Promise.all([Promise.all(jobs), fonts]), 2500);
+        mark("ASSETS_PRELOADED", BRANDING.filter(function (b) { return b.available; }).length + "/3");
+        return BRANDING;
+    }
+
+    async function brandPrelude(screen, durationSeconds) {
         setPhase(screen, "prelude");
         var card = document.getElementById("brand_card");
         var image = document.getElementById("brand_image");
-        var echo = document.getElementById("brand_echo");
+        var scale = Math.max(0.05, durationSeconds / 13.0);
+        var stages = [
+            { fadeIn: 800, hold: 2500, fadeOut: 700 },
+            { fadeIn: 800, hold: 2500, fadeOut: 700 },
+            { fadeIn: 800, hold: 3000, fadeOut: 800 }
+        ];
         for (var i = 0; i < BRANDING.length; i++) {
             var brand = BRANDING[i];
-            image.src = echo.src = brand.image;
-            image.alt = brand.name;
-            image.className = echo.className = brand.wide ? "wide" : "";
-            document.getElementById("brand_index").textContent = "IDENT // 0" + (i + 1);
-            document.getElementById("brand_role").textContent = brand.role;
-            document.getElementById("brand_name").textContent = brand.name;
-            document.getElementById("brand_status").textContent = "RECONSTRUCTING IDENTITY";
+            var timing = stages[i];
+            mark("BRAND_" + (i + 1) + "_START", brand.name);
             card.className = "brand-card";
-            void card.offsetWidth;
-            card.classList.add("acquire");
+            card.style.transition = "none";
+            image.alt = brand.name;
+            image.className = brand.wide ? "wide" : "";
+            document.getElementById("brand_name").textContent = brand.name;
+            if (brand.available) {
+                image.hidden = false;
+                image.src = brand.image;
+            } else {
+                image.hidden = true;
+                card.classList.add("fallback");
+                global.dispatchEvent(new CustomEvent("mantis:brand-missing", { detail: brand.name }));
+            }
+            await new Promise(function (resolve) { global.requestAnimationFrame(resolve); });
+            card.style.transition = "opacity " + (timing.fadeIn * scale) +
+                "ms ease, transform " + (timing.fadeIn * scale) + "ms ease";
+            card.classList.add("visible");
             A.play(brand.cue);
-            await delay(340 * scale);
-            document.getElementById("brand_status").textContent = "IDENTITY VERIFIED";
-            await delay(900 * scale);
-            card.classList.add("release");
-            await delay(310 * scale);
+            await delay((timing.fadeIn + timing.hold) * scale);
+            card.style.transition = "opacity " + (timing.fadeOut * scale) +
+                "ms ease, transform " + (timing.fadeOut * scale) + "ms ease";
+            card.classList.remove("visible");
+            await delay(timing.fadeOut * scale);
+            mark("BRAND_" + (i + 1) + "_END", brand.name);
+            if (i < BRANDING.length - 1) await delay(200 * scale);
         }
     }
 
@@ -157,7 +202,7 @@
                 else if (/DENIED|AUTH_NOT_CONFIGURED|PROXY_UNVERIFIED|OBSERVATION ONLY/.test(line)) {
                     cls = " class=\"warn\"";
                     A.play("tick");
-                } else if (line !== "") {
+                } else if (line !== "" && i % 4 === 0) {
                     A.play("tick");
                 }
                 el.insertAdjacentHTML("beforeend", "<div" + cls + ">" + (line || "&nbsp;") + "</div>");
@@ -172,14 +217,17 @@
     /* A large identity slab that fills, outlines, tears, then settles.
      * Matches the upstream fill -> outline -> glitch -> settle progression. */
     async function identity(screen, text, subtitle, scale, cue) {
-        screen.innerHTML = "";
-        screen.className = "center";
+        setPhase(screen, "identity");
+        screen.classList.add("center");
         if (cue) A.play(cue);
 
         await delay(70 * scale);
-        screen.innerHTML = '<h1 data-text="' + text + '">' + text +
-            (subtitle ? '<span class="sub">' + subtitle + "</span>" : "") + "</h1>";
-        var h1 = screen.querySelector("h1");
+        var h1 = document.getElementById("identity_title");
+        document.getElementById("identity_word").textContent = text;
+        document.getElementById("identity_subtitle").textContent = subtitle || "";
+        h1.dataset.text = text;
+        h1.className = "";
+        h1.removeAttribute("style");
 
         await delay(160 * scale);
         document.body.className = "solid";
@@ -194,12 +242,7 @@
 
         await delay(90 * scale);
         h1.style.border = "";
-        h1.classList.add("glitch");
-        document.body.classList.add("flicker");
-
         await delay(220 * scale);
-        h1.classList.remove("glitch");
-        document.body.classList.remove("flicker");
         document.body.className = global.MANTIS_GRID === false ? "solid" : "grid";
         h1.style.border = "0.28vh solid rgb(var(--c))";
 
@@ -209,12 +252,12 @@
     /* The interface builds itself: the centre pane unfolds first, then the rail
      * modules pop in one at a time with a sound each -- upstream's 500ms panel
      * cadence, scaled. */
-    async function assemble(scale, onReady) {
+    async function assemble(scale, options) {
         var shell = document.getElementById("shell");
         var workspace = document.getElementById("workspace");
         var screen = document.getElementById("boot_screen");
 
-        screen.classList.add("transparent");
+        setPhase(screen, "assembly");
         workspace.classList.add("folded");
         shell.classList.add("live");
 
@@ -224,61 +267,84 @@
         workspace.classList.add("on");
 
         await delay(300 * scale);
-        screen.remove();
 
-        // Modules populate in a deliberate order: identity and time first, then
-        // the data path, then the instruments, then the lower band.
-        var order = [
-            "mod_clock", "mod_identity", "mod_economics",
-            "mod_engine", "mod_providers", "mod_telemetry",
-            "mod_assetmap", "mod_process", "mod_matrix",
-            "mod_stream", "mod_forward"
-        ];
-        for (var i = 0; i < order.length; i++) {
-            var node = document.getElementById(order[i]);
-            if (node) {
-                node.classList.add("on");
-                A.play("panel_online");
-            }
-            await delay(60 * scale);
-        }
-
-        await delay(150 * scale);
+        // The populated shell is still boot-locked. Apply module visibility in
+        // one style batch instead of running eleven invisible transitions.
+        document.querySelectorAll(".module").forEach(function (node) { node.classList.add("on"); });
+        A.play("panel_online");
+        await delay(660 * scale); // preserve the established 8.5s technical cadence
+        setPhase(screen, "hydrating");
+        mark("TECH_BOOT_END");
+        if (options.onHydrate) await options.onHydrate();
+        setPhase(screen, "settling");
+        await delay(Math.max(0, Number(options.settleSeconds || 0)) * 1000);
+        document.body.classList.add("operational-ready");
+        await new Promise(function (resolve) {
+            global.requestAnimationFrame(function () { global.requestAnimationFrame(resolve); });
+        });
+        if (screen.parentNode) screen.remove();
         A.play("system_ready");
-        if (onReady) onReady();
+        setPhase(document.body, "ready");
+        if (options.onReady) options.onReady();
+        mark("READY");
     }
 
     /* Unscaled: 4.65s brand forge + 1.68s identity handoff + 0.15s opening +
      * ~1.66s technical log + 1.8s wordmarks + 1.15s assembly. The default
      * stretches this deliberate choreography to fifteen seconds. */
-    var NOMINAL_SECONDS = 11.09;
+    var TECHNICAL_NOMINAL_SECONDS = 6.44;
 
     async function run(options) {
         var opts = options || {};
-        var scale = Math.max(0.15, (opts.duration || 15.0) / NOMINAL_SECONDS);
+        var technicalSeconds = Number(opts.technicalDuration || 8.5);
+        var scale = Math.max(0.05, technicalSeconds / TECHNICAL_NOMINAL_SECONDS);
         var screen = document.getElementById("boot_screen");
         var log = document.getElementById("boot_log");
 
         if (!opts.enabled) {
-            if (screen) screen.remove();
             document.body.className = global.MANTIS_GRID === false ? "solid" : "grid";
             document.getElementById("shell").classList.add("live");
             document.querySelectorAll(".module").forEach(function (m) { m.classList.add("on"); });
+            if (opts.onHydrate) await opts.onHydrate(true);
+            document.body.classList.add("operational-ready");
+            if (screen) screen.remove();
             if (opts.onReady) opts.onReady();
             return;
         }
 
         document.body.className = "solid";
-        await brandPrelude(screen, scale);
+        await preloadBranding();
+        var debugStage = new URLSearchParams(global.location.search).get("bootStage");
+        if (debugStage) {
+            var brand = BRANDING.find(function (item) { return item.key === debugStage; });
+            if (brand) {
+                setPhase(screen, "prelude");
+                var card = document.getElementById("brand_card");
+                var image = document.getElementById("brand_image");
+                document.getElementById("brand_name").textContent = brand.name;
+                card.className = "brand-card visible" + (brand.available ? "" : " fallback");
+                image.hidden = !brand.available;
+                if (brand.available) image.src = brand.image;
+                return new Promise(function () {});
+            }
+        }
+        if (opts.brandPreludeEnabled !== false) {
+            await brandPrelude(screen, Number(opts.brandPreludeDuration || 13.0));
+        }
         await identityHandoff(screen, scale);
         setPhase(screen, "boot");
+        mark("TECH_BOOT_START");
         await delay(150 * scale);
         await runLog(log, scale);
         await identity(screen, "SHG", "SAAF HOLDINGS GROUP // INTELLIGENCE SYSTEMS", scale, "shg_boot");
         await identity(screen, "MANTIS",
             "MARKET ANALYSIS AND NEURO-TACTICAL INTRADAY SIGNAL SYSTEM", scale, "init_pulse");
-        await assemble(scale, opts.onReady);
+        await assemble(scale, opts);
     }
 
-    global.MantisBoot = { run: run, LOG: LOG, BRANDING: BRANDING };
+    global.MantisBoot = {
+        run: run, LOG: LOG, BRANDING: BRANDING,
+        BRAND_PRELUDE_NOMINAL_SECONDS: 13.0,
+        TECHNICAL_NOMINAL_SECONDS: TECHNICAL_NOMINAL_SECONDS
+    };
 })(window);

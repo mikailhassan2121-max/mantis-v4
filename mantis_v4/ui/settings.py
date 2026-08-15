@@ -61,9 +61,15 @@ class PresentationConfig:
 
     # -- boot sequence ------------------------------------------------------
     boot_sequence_enabled: bool = True
-    boot_duration: float = 15.0             # cinematic prelude + boot + shell assembly
+    brand_prelude_enabled: bool = True
+    brand_prelude_duration_seconds: float = 13.0
+    technical_boot_duration_seconds: float = 8.5
+    startup_settle_seconds: float = 0.75
+    startup_snapshot_timeout_seconds: float = 7.0
+    demo_ready_delay_seconds: float = 2.5
+    boot_duration: float = 21.5             # compatibility: prelude + technical boot
     boot_audio_enabled: bool = True
-    startup_alert_suppression_seconds: float = 16.0  # gate operational tones/speech
+    startup_alert_suppression_seconds: float = 23.0  # safety fallback; READY arms sooner
     show_advanced_diagnostics: bool = False
     default_focused_asset: str = "BTC-USD"
     event_log_length: int = 200             # in-memory cap; disk logs stay append-only
@@ -208,6 +214,16 @@ class PresentationConfig:
             raise ValueError("web_port must be between 0 and 65535")
         if not 0.0 <= self.boot_duration <= 30.0:
             raise ValueError("boot_duration must be between 0 and 30 seconds")
+        if not 0.0 <= self.brand_prelude_duration_seconds <= 20.0:
+            raise ValueError("brand_prelude_duration_seconds must be between 0 and 20 seconds")
+        if not 0.0 <= self.technical_boot_duration_seconds <= 20.0:
+            raise ValueError("technical_boot_duration_seconds must be between 0 and 20 seconds")
+        if not 0.0 <= self.startup_settle_seconds <= 3.0:
+            raise ValueError("startup_settle_seconds must be between 0 and 3 seconds")
+        if not 1.0 <= self.startup_snapshot_timeout_seconds <= 30.0:
+            raise ValueError("startup_snapshot_timeout_seconds must be between 1 and 30 seconds")
+        if not 0.0 <= self.demo_ready_delay_seconds <= 10.0:
+            raise ValueError("demo_ready_delay_seconds must be between 0 and 10 seconds")
         if not 0.0 <= self.startup_alert_suppression_seconds <= 60.0:
             raise ValueError("startup_alert_suppression_seconds must be between 0 and 60 seconds")
         if self.diagnostic_log_max_bytes < 16_384:
@@ -248,6 +264,7 @@ class PresentationConfig:
         if getattr(args, "no_startup", False):
             self.startup_animation = False
             self.boot_sequence_enabled = False
+            self.brand_prelude_enabled = False
             self.startup_alert_suppression_seconds = 0.0
         if getattr(args, "demo", False):
             self.demo_mode = True

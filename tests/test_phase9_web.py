@@ -339,26 +339,31 @@ class FrontendAssetTests(unittest.TestCase):
 
  def test_boot_identifies_shg_before_mantis(self):
   boot=(WEB/"boot.js").read_text(encoding="utf-8")
-  holdings=boot.index('/branding/saaf_holdings_group.png')
-  ventures=boot.index('/branding/saaf_ventures.png')
-  mantis=boot.index('/branding/mantis_darpa.png')
+  holdings=boot.index('saaf_holdings_group.png')
+  ventures=boot.index('saaf_ventures.png')
+  mantis=boot.index('mantis_darpa.png')
   self.assertLess(holdings,ventures)
   self.assertLess(ventures,mantis)
 
  def test_boot_is_a_long_explicit_state_sequence(self):
   boot=(WEB/"boot.js").read_text(encoding="utf-8")
-  order=["brandPrelude(screen, scale)","identityHandoff(screen, scale)",
+  boot=boot[boot.index("async function run(options)"):]
+  order=["brandPrelude(screen, Number(opts.brandPreludeDuration","identityHandoff(screen, scale)",
          'setPhase(screen, "boot")',"runLog(log, scale)",
          'identity(screen, "SHG"','identity(screen, "MANTIS"',
-         "assemble(scale, opts.onReady)"]
+         "assemble(scale, opts)"]
   positions=[boot.index(item) for item in order]
   self.assertEqual(positions,sorted(positions))
   self.assertGreaterEqual(PresentationConfig().boot_duration,12.0)
 
- def test_brand_images_receive_monochrome_scanned_treatment(self):
+ def test_brand_images_receive_clean_monochrome_oem_treatment(self):
   css=(WEB/"app.css").read_text(encoding="utf-8")
-  for token in ("grayscale(1)","invert(1)","brandScan","brandEcho","brand-reticle"):
+  boot=(WEB/"boot.js").read_text(encoding="utf-8")
+  for token in ("background:#000","background:transparent","filter:none"):
    self.assertIn(token,css)
+  self.assertIn("/branding/processed/",boot)
+  for removed in ("brandScan","brandEcho","brand-reticle","brand-crosshair"):
+   self.assertNotIn(removed,css)
 
  def test_audio_is_synthesized_not_sampled(self):
   audio=(WEB/"audio.js").read_text(encoding="utf-8")

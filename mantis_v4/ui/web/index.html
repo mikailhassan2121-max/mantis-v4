@@ -16,19 +16,11 @@
 
 <section id="boot_screen" data-phase="prelude">
   <div id="brand_stage" aria-live="polite">
-    <div class="brand-grid"></div>
-    <div class="brand-reticle"></div>
     <div class="brand-card" id="brand_card">
-      <div class="brand-index" id="brand_index">IDENT // 01</div>
       <div class="brand-frame">
         <img id="brand_image" alt="" />
-        <img id="brand_echo" alt="" aria-hidden="true" />
-        <div class="brand-scan"></div>
-        <div class="brand-crosshair"></div>
       </div>
-      <div class="brand-role" id="brand_role"></div>
       <div class="brand-name" id="brand_name"></div>
-      <div class="brand-status" id="brand_status">ACQUIRING IDENTITY</div>
     </div>
   </div>
   <div id="handoff_stage">
@@ -38,6 +30,12 @@
     <div class="handoff-lock">IDENTITY CHAIN VERIFIED</div>
   </div>
   <div id="boot_log"></div>
+  <div id="identity_stage">
+    <h1 id="identity_title" data-text="">
+      <span id="identity_word"></span>
+      <span class="sub" id="identity_subtitle"></span>
+    </h1>
+  </div>
 </section>
 
 <main id="shell">

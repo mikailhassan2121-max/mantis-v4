@@ -91,6 +91,8 @@ body.solid { background: var(--bg); }
         rgba(0, 0, 0, 0) 55%, rgba(0, 0, 0, 0.45) 100%);
 }
 body.no-scanlines #scanlines { display: none; }
+body.brand-prelude #scanlines { display:none; }
+body.brand-prelude { background:#000; }
 
 body.flicker #scanlines { animation: flicker 90ms steps(2) infinite; }
 @keyframes flicker {
@@ -195,36 +197,21 @@ body.flicker #scanlines { animation: flicker 90ms steps(2) infinite; }
     to   { transform: translateX(3%); }
 }
 
-/* Cinematic identity prelude. Supplied marks are transformed into silver
- * linework and revealed inside a scanning instrument, never shown as flat
- * color-logo slides. */
-#brand_stage, #handoff_stage { position:absolute; inset:0; display:none; overflow:hidden; }
+/* Quiet OEM/workstation identity prelude: black, centered, monochrome. */
+#brand_stage, #handoff_stage, #identity_stage { position:absolute; inset:0; display:none; overflow:hidden; }
 #boot_screen[data-phase="prelude"] #brand_stage { display:grid; place-items:center; }
-.brand-grid { position:absolute; inset:0; opacity:.25; background:linear-gradient(90deg,transparent 49.9%,rgba(210,225,230,.22) 50%,transparent 50.1%),linear-gradient(transparent 49.9%,rgba(210,225,230,.18) 50%,transparent 50.1%); background-size:8vh 8vh; animation:brandGrid 2.2s linear infinite; }
-@keyframes brandGrid { from{transform:scale(1.08);opacity:.08} to{transform:scale(1);opacity:.28} }
-.brand-reticle { position:absolute; width:78vh; height:78vh; border:1px solid rgba(var(--c),.16); border-radius:50%; }
-.brand-reticle::before,.brand-reticle::after { content:"";position:absolute;inset:8%;border:1px dashed rgba(var(--c),.12);border-radius:50%; }
-.brand-reticle::after { inset:22%;border-style:solid;animation:reticleSpin 8s linear infinite;clip-path:polygon(0 0,100% 0,100% 28%,0 28%); }
-@keyframes reticleSpin { to{transform:rotate(360deg)} }
-.brand-card { width:min(72vw,100vh);text-align:center;opacity:0;transform:scale(.94); }
-.brand-card.acquire { animation:brandAcquire .45s steps(5) forwards; }
-.brand-card.release { animation:brandRelease .38s steps(4) forwards; }
-@keyframes brandAcquire { 0%{opacity:0;transform:scale(.94) skewX(-2deg)} 60%{opacity:.55;filter:blur(2px)} 100%{opacity:1;transform:none;filter:none} }
-@keyframes brandRelease { 0%{opacity:1} 45%{transform:translateX(1.2vh);filter:brightness(2)} 100%{opacity:0;transform:scale(1.04);filter:blur(5px)} }
-.brand-index,.brand-role,.brand-status { font-family:var(--font-mono);letter-spacing:.28em;font-size:1.05vh;color:rgba(var(--c),.62); }
-.brand-index { text-align:left;border-bottom:1px solid rgba(var(--c),.3);padding:.5vh 0; }
-.brand-frame { height:38vh;margin:1.6vh 0;position:relative;display:grid;place-items:center;overflow:hidden;clip-path:polygon(3% 0,100% 0,100% 92%,97% 100%,0 100%,0 8%);border:1px solid rgba(var(--c),.28);background:rgba(0,0,0,.78); }
-.brand-frame img { position:absolute;max-width:76%;max-height:76%;object-fit:contain;filter:grayscale(1) contrast(1.75) invert(1) brightness(1.25);mix-blend-mode:screen;opacity:.9; }
-.brand-frame img.wide { max-width:84%; }
-#brand_echo { opacity:.2;transform:translateX(.6vh);filter:grayscale(1) contrast(2) invert(1) brightness(1.8);clip-path:polygon(0 43%,100% 35%,100% 65%,0 72%);animation:brandEcho 110ms steps(2) infinite; }
-@keyframes brandEcho { 50%{transform:translateX(-.8vh)} }
-.brand-scan { position:absolute;left:0;right:0;height:.24vh;background:#fff;box-shadow:0 0 2vh rgba(var(--c),.9);animation:brandScan 1.25s cubic-bezier(.4,0,1,1) infinite; }
-@keyframes brandScan { from{top:-3%;opacity:0} 10%{opacity:1} 90%{opacity:1} to{top:103%;opacity:0} }
-.brand-crosshair::before,.brand-crosshair::after { content:"";position:absolute;background:rgba(var(--c),.16); }
-.brand-crosshair::before{left:50%;top:0;width:1px;height:100%}.brand-crosshair::after{top:50%;left:0;height:1px;width:100%}
-.brand-name { font-size:3.1vh;font-weight:600;letter-spacing:.34em;margin:.8vh 0;color:#e8eef0;text-shadow:0 0 1.6vh rgba(var(--c),.35); }
-.brand-status::before{content:"[ "}.brand-status::after{content:" ]"}
+#boot_screen[data-phase="prelude"] { inset:0;padding:0;width:100vw;height:100vh;background:#000; }
+#brand_stage { width:100vw;height:100vh;background:#000;border:0;outline:0;box-shadow:none; }
+.brand-card { width:min(76vw,108vh);text-align:center;opacity:0;transform:scale(.99);will-change:opacity,transform;background:transparent;border:0;outline:0;box-shadow:none; }
+.brand-card.visible { opacity:1;transform:none; }
+.brand-frame { height:48vh;position:relative;display:grid;place-items:center;background:transparent;border:0;outline:0;box-shadow:none; }
+.brand-frame img { max-width:82%;max-height:88%;object-fit:contain;opacity:1;filter:none;background:transparent;border:0;outline:0;box-shadow:none; }
+.brand-frame img.wide { max-width:92%; }
+.brand-name { display:none;font-size:3.1vh;font-weight:500;letter-spacing:.3em;color:#e8eef0;text-shadow:0 0 1.2vh rgba(220,230,234,.22); }
+.brand-card.fallback .brand-frame { display:none; }
+.brand-card.fallback .brand-name { display:block; }
 #boot_screen[data-phase="handoff"] #handoff_stage { display:flex;flex-direction:column;justify-content:center;padding:0 17vw;gap:2.2vh; }
+#boot_screen[data-phase="identity"] #identity_stage { display:grid;place-items:center; }
 .handoff-line { display:grid;grid-template-columns:1fr 20vw 24vw;align-items:center;gap:2vh;opacity:0;transform:translateX(-3vw);font-family:var(--font-mono);font-size:1.05vh;letter-spacing:.16em; }
 .handoff-line i { height:1px;background:linear-gradient(90deg,transparent,rgb(var(--c))); }
 .handoff-line b { font-family:var(--font-main);font-size:2.1vh;letter-spacing:.18em;color:#edf2f3; }
@@ -234,7 +221,16 @@ body.flicker #scanlines { animation: flicker 90ms steps(2) infinite; }
 .handoff-lock.on { animation:lockIn .6s steps(4) forwards; }
 @keyframes lockIn { to{opacity:1;text-shadow:0 0 1vh rgba(var(--c),.7)} }
 #boot_screen[data-phase="boot"] #boot_log { display:block; }
-#boot_screen[data-phase="prelude"] #boot_log,#boot_screen[data-phase="handoff"] #boot_log { display:none; }
+#boot_screen[data-phase="prelude"] #boot_log,
+#boot_screen[data-phase="handoff"] #boot_log,
+#boot_screen[data-phase="identity"] #boot_log,
+#boot_screen[data-phase="assembly"] #boot_log { display:none; }
+
+/* Hydrate behind the opaque boot layer and reveal the shell in one paint. */
+body:not(.operational-ready) #shell { visibility:hidden; }
+body:not(.operational-ready) #demo_band,
+body:not(.operational-ready) #offline { visibility:hidden; }
+body:not(.operational-ready) .module { transition:none; }
 
 /* ------------------------------------------------------------------- shell */
 

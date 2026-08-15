@@ -69,6 +69,8 @@ class AlertRouter:
         if bool(getattr(config, "boot_sequence_enabled", False)):
             gate = max(gate, float(getattr(config, "boot_duration", 0.0)) + 1.0)
         self._live_alerts_at = time.monotonic() + gate
+        self._armed = gate <= 0.0
+        self._online_announced = False
         self.routed: list[tuple[str, str]] = []   # (event type, severity) for tests
 
     # -- subscription -------------------------------------------------------
@@ -118,7 +120,7 @@ class AlertRouter:
         self.routed.append((event.type.value, route.severity.value))
         del self.routed[:-64]
 
-        live_alerts = time.monotonic() >= self._live_alerts_at
+        live_alerts = self._armed or time.monotonic() >= self._live_alerts_at
         if live_alerts and route.audio_cue and self.config.audio_allows(route.audio_key):
             if self._allow(self._last_audio, f"{route.audio_cue}:{asset}",
                            self.config.audio_min_interval_seconds):
@@ -175,11 +177,26 @@ class AlertRouter:
 
     # -- direct (non-hook) notices -----------------------------------------
 
+    def arm(self, announce: bool = True) -> bool:
+        """Arm operational alerts at presentation READY, exactly once."""
+        with self._lock:
+            first = not self._armed
+            self._armed = True
+            should_announce = announce and not self._online_announced
+            if should_announce:
+                self._online_announced = True
+        if should_announce and self.config.voice_enabled:
+            try:
+                self.voice.say("MANTIS online.")
+            except Exception:
+                pass
+        return first
+
     def provider_failure(self, provider: str, detail: str) -> None:
         """Provider health degradation. Routed as a warning, not a hook event."""
         self.state.log(Severity.WARNING.value, "PROVIDER",
                        f"PROVIDER DEGRADED: {provider}", detail)
-        if self.config.audio_allows("error") and self._allow(
+        if (self._armed or time.monotonic() >= self._live_alerts_at) and self.config.audio_allows("error") and self._allow(
                 self._last_audio, f"provider:{provider}", self.config.audio_min_interval_seconds):
             self.audio.play("provider_failure")
 
