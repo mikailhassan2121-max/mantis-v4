@@ -586,6 +586,12 @@ body:not(.operational-ready) .module { transition:none; }
 #decision_slab.state-data_hold { border-color: var(--red); color: var(--red); }
 #decision_slab.state-data_hold #decision_reason b { color: var(--red); }
 
+.selection-summary { border: 1px solid var(--line-soft); padding: .7vh 1vh; margin-top: .7vh; background: rgba(0,0,0,.28); }
+.candidate-ranking { border: 1px solid var(--line-soft); margin-top: .6vh; font-size: 1.05vh; }
+.rank-head,.rank-row { display:grid; grid-template-columns:.7fr .55fr .7fr .7fr .8fr 1.45fr; gap:.5vh; padding:.35vh .7vh; }
+.rank-head { color:var(--dim); border-bottom:1px solid var(--line-soft); }
+.rank-row { color:var(--value-bright); border-bottom:1px solid rgba(var(--c),.08); }
+
 #contract_grid {
     flex: 1 1 auto;
     display: grid;

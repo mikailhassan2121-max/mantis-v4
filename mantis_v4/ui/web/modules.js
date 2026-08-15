@@ -224,8 +224,15 @@
     /* ------------------------------------------------- active contract view */
 
     function renderContract(snap, ticked) {
-        var view = focused(snap);
-        if (!view) return;
+        var view = focused(snap) || {asset:"SYSTEM", classification:{key:"unknown",label:"STANDBY"},
+            final:{key:"unknown",label:"STANDBY"}, provider:{}, economics:{}};
+        var selection = snap.primary_selection || {};
+        var operator = snap.operator_state || {};
+        var selected = operator.primary_selection || null;
+        var strongest = operator.strongest_candidate || null;
+        if (snap.presentation && snap.presentation.operator_diagnostics) {
+            console.info("MANTIS_OPERATOR", "FRONTEND_RENDERED_CENTER", operator.mode || "STANDBY");
+        }
 
         document.getElementById("contract_asset").textContent = view.asset;
         document.getElementById("contract_window").textContent =
@@ -242,11 +249,41 @@
             ((F.has(elapsed) ? elapsed : 0) * 100).toFixed(1) + "%";
 
         var slab = document.getElementById("decision_slab");
-        slab.className = "state-" + view.final.key;
-        document.getElementById("decision_glyph").textContent = view.final.glyph;
-        document.getElementById("decision_label").textContent = view.final.label;
+        var mode = operator.mode || "STANDBY";
+        var selectedKey = selected ? (selected.side === "YES" ? "enter_yes" : "enter_no") :
+            (mode === "PROVIDER_DEGRADED" ? "data_hold" : (mode === "STANDBY" ? "unknown" : "no_trade"));
+        slab.className = "state-" + selectedKey;
+        document.getElementById("decision_glyph").textContent = selected ? "◆" : "×";
+        document.getElementById("decision_label").textContent = selected ? "PRIMARY SELECTION — ENTER " + selected.side : "NO TRADE";
         document.getElementById("decision_reason").innerHTML =
-            "REASON<b>" + esc(view.final_reason_text || DASH) + "</b>";
+            "STATUS<b>" + esc(selected ? "ECONOMICALLY VALIDATED" : ((strongest && strongest.reason) || "AWAITING CANDIDATES")) + "</b>";
+
+        // The backend owns operator semantics; these assignments intentionally
+        // override the legacy selector-derived labels above.
+        document.getElementById("decision_label").textContent = selected ?
+            "PRIMARY SELECTION — ENTER " + selected.side : (operator.headline || "STANDBY");
+        document.getElementById("decision_reason").innerHTML =
+            "STATUS<b>" + esc(operator.reason || "AWAITING FIRST SCANNER SNAPSHOT") + "</b>";
+        var summary = selected || strongest || {};
+        rows(document.getElementById("primary_selection_summary"), [
+            { k: selected ? "PRIMARY CONTRACT SELECTION" : "STRONGEST CURRENT CANDIDATE", v: summary.asset ? summary.asset.replace("-USD", "") + " / 15M" : DASH, cls: selected ? "ok" : "warnc" },
+            { k: "SIDE / MODEL CONF", v: (summary.side || DASH) + " / " + F.pct(summary.confidence) },
+            { k: "CONSERVATIVE PROB", v: F.pct(summary.conservative_probability) },
+            { k: "EXECUTABLE ASK", v: F.has(summary.ask) ? F.money(summary.ask) : "UNAVAILABLE" },
+            { k: "OPENING FEE", v: F.has(summary.fee) ? F.money(summary.fee) : "$0.0200" },
+            { k: "NET BREAK-EVEN", v: F.pct(summary.net_break_even) },
+            { k: "MODEL / CONS EDGE", v: F.has(summary.model_edge) ? F.pct(summary.model_edge, 1) + " / " + F.pct(summary.conservative_edge, 1) : DASH },
+            { k: "NET / CONS EV", v: F.has(summary.net_ev) ? F.money(summary.net_ev) + " / " + F.money(summary.conservative_net_ev) : DASH },
+            { k: "ACTION", v: selected ? "PRIMARY SELECTION" : "WAIT / NO TRADE", cls: selected ? "ok" : "warnc" }
+        ]);
+        if (!selected && F.has(operator.seconds_until_entry_eligible) && operator.seconds_until_entry_eligible > 0) {
+            document.getElementById("primary_selection_summary").innerHTML += '<div class="row"><span class="k">EARLIEST ENTRY IN</span><span class="v warnc">'+esc(F.countdown(operator.seconds_until_entry_eligible))+'</span></div>';
+        }
+        var table='<div class="rank-head"><span>ASSET</span><span>SIDE</span><span>CONF</span><span>ASK</span><span>NET EDGE</span><span>STATUS</span></div>';
+        (operator.candidate_rankings || []).forEach(function(c){
+            table+='<div class="rank-row"><span>'+esc(String(c.asset||"").replace("-USD",""))+'</span><span>'+esc(c.side||DASH)+'</span><span>'+esc(F.pct(c.confidence))+'</span><span>'+esc(F.has(c.ask)?F.money(c.ask):DASH)+'</span><span>'+esc(F.has(c.model_edge)?F.pct(c.model_edge,1):DASH)+'</span><span class="'+(c.status==="ACTIONABLE"?"ok":"warnc")+'">'+esc(selected&&selected.asset===c.asset?"SELECTED":(c.reason||c.status))+'</span></div>';
+        });
+        document.getElementById("candidate_ranking").innerHTML=table;
 
         var bufferPct = (F.has(view.buffer) && view.reference) ? view.buffer / view.reference : null;
 

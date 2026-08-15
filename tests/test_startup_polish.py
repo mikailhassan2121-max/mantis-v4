@@ -187,7 +187,7 @@ class ReadyAndAlertTests(unittest.TestCase):
         self.assertEqual(voice.spoken, ["MANTIS online."])
         router.handle(event)
         self.assertEqual(audio.played, ["enter_yes"])
-        self.assertEqual(voice.spoken[-1], "MANTIS. Bitcoin. Enter Yes.")
+        self.assertEqual(voice.spoken, ["MANTIS online."])
 
     def test_demo_feed_waits_for_ready_then_delays(self):
         runner = (ROOT / "mantis_v4_live.py").read_text(encoding="utf-8")

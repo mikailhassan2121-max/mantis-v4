@@ -107,6 +107,7 @@ class PresentationConfig:
     diagnostic_log_max_bytes: int = 2_000_000
     diagnostic_log_backups: int = 3
     developer_mode: bool = False            # show raw tracebacks in-band
+    operator_diagnostics: bool = False      # event/state tracing; never quant behavior
 
     # -- modes (set by CLI, never persisted as "real") ----------------------
     demo_mode: bool = False
@@ -261,6 +262,8 @@ class PresentationConfig:
             self.voice_enabled = False
         if getattr(args, "diagnostics", False):
             self.show_advanced_diagnostics = True
+        if getattr(args, "operator_diagnostics", False):
+            self.operator_diagnostics = True
         if getattr(args, "no_startup", False):
             self.startup_animation = False
             self.boot_sequence_enabled = False

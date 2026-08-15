@@ -4,7 +4,7 @@ import csv,json,os,threading
 from pathlib import Path
 from typing import Iterable
 class ForwardStore:
- FILES={"observations":"observations.jsonl","entries":"entries.jsonl","resolutions":"resolutions.jsonl","provider_health":"provider_health.jsonl","runs":"runs.jsonl","window_events":"window_events.jsonl","session_events":"session_events.jsonl"}
+ FILES={"observations":"observations.jsonl","entries":"entries.jsonl","resolutions":"resolutions.jsonl","provider_health":"provider_health.jsonl","runs":"runs.jsonl","window_events":"window_events.jsonl","session_events":"session_events.jsonl","primary_selections":"primary_selections.jsonl"}
  # Existing Phase 8 rows are implicit version 1. This registry documents that
  # contract without rewriting historical append-only files.
  SCHEMA_VERSIONS={name:1 for name in FILES}
@@ -15,6 +15,7 @@ class ForwardStore:
   self._resolved_keys={(x.get("contract_id"),x.get("asset")) for x in self.read("resolutions")}
   self._observed_contracts={}
   for row in self.read("observations"): self._observed_contracts.setdefault((row.get("contract_id"),row.get("asset")),row)
+  self._primary_by_contract={x.get("contract_id"):x for x in self.read("primary_selections") if x.get("contract_id")}
  def path(self,name): return self.directory/self.FILES[name]
  def read(self,name)->list[dict]:
   if name not in self.FILES: raise KeyError(f"unknown forward record type {name!r}")
@@ -32,7 +33,7 @@ class ForwardStore:
      out.append(value)
    return out
  def _load_ids(self,name):
-  keys={"observations":"observation_id","entries":"entry_id","resolutions":"resolution_id","runs":"run_id","provider_health":"health_id","window_events":"window_event_id","session_events":"session_event_id"}
+  keys={"observations":"observation_id","entries":"entry_id","resolutions":"resolution_id","runs":"run_id","provider_health":"health_id","window_events":"window_event_id","session_events":"session_event_id","primary_selections":"selection_id"}
   return {str(x.get(keys[name])) for x in self.read(name) if x.get(keys[name]) is not None}
  def append(self,name,record:dict,id_field:str)->bool:
   if name not in self.FILES: raise KeyError(f"unknown forward record type {name!r}")
@@ -47,6 +48,7 @@ class ForwardStore:
    if name=="entries": self._entry_keys.add(key)
    if name=="resolutions": self._resolved_keys.add(key)
    if name=="observations": self._observed_contracts.setdefault(key,record)
+   if name=="primary_selections": self._primary_by_contract.setdefault(record.get("contract_id"),record)
    return True
  def has_entry(self,contract_id,asset):
   with self._lock: return (contract_id,asset) in self._entry_keys
@@ -58,3 +60,5 @@ class ForwardStore:
  def unresolved_entries(self):
   with self._lock:
    return [x for x in self.read("entries") if (x.get("contract_id"),x.get("asset")) not in self._resolved_keys]
+ def primary_selection(self,contract_id):
+  with self._lock: return self._primary_by_contract.get(contract_id)

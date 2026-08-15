@@ -274,6 +274,10 @@ class SystemStatus:
     browser_shell_status: str = "NOT STARTED"
     demo_mode: bool = False
     observation_only: bool = True
+    voice_events_received: int = 0
+    voice_events_suppressed: int = 0
+    actionable_voice_events: int = 0
+    primary_selections_created: int = 0
 
 
 @dataclass(frozen=True)
@@ -299,6 +303,8 @@ class UiSnapshot:
     historical: Optional[dict]
     last_error: Optional[SystemError]
     focus: Optional[str]
+    primary_selection: Optional[dict] = None
+    operator_state: Optional[dict] = None
     demo_mode: bool = False
 
 
@@ -315,6 +321,8 @@ class CommandCenterState:
         self._forward: Optional[dict] = None
         self._historical: Optional[dict] = None
         self._last_error: Optional[SystemError] = None
+        self._primary_selection: Optional[dict] = None
+        self._operator_state: Optional[dict] = None
 
     # -- writes (quant thread) ---------------------------------------------
 
@@ -327,6 +335,11 @@ class CommandCenterState:
                 self._order.append(asset)
             view = view_from_snapshot(snapshot, self._assets.get(asset), synthetic=synthetic)
             self._assets[asset] = view
+            if self._operator_state is None or self._operator_state.get("mode") == "STANDBY":
+                from ..selection import operator_state
+                provisional={"selected":None,"strongest_candidate":None,"candidates":[],
+                    "earliest_entry_in_seconds":max(0.0,(view.seconds_remaining(view.scan_timestamp) or 0)-300)}
+                self._operator_state=operator_state(provisional,[snapshot])
             return view
 
     def mark_no_data(self, asset: str, reason: str = "UNDERLYING_DATA_UNAVAILABLE") -> None:
@@ -352,6 +365,19 @@ class CommandCenterState:
                 synthetic=previous.synthetic,
                 spark=previous.spark,
             )
+            from ..selection import LIVE_ASSETS, SELECTION_POLICY_ID
+            rankings=[]
+            for candidate_asset in LIVE_ASSETS:
+                candidate=self._assets.get(candidate_asset)
+                rankings.append({"asset":candidate_asset,"side":getattr(candidate,"predicted_side",None),
+                    "confidence":None,"conservative_probability":None,"ask":None,"model_edge":None,
+                    "status":"NO DATA","reason":reason})
+            self._operator_state={"mode":"PROVIDER_DEGRADED","headline":"DATA HOLD","reason":reason,
+                "primary_selection":None,"strongest_candidate":None,"candidate_rankings":rankings,
+                "economics_status":"UNVERIFIED","selection_policy_version":SELECTION_POLICY_ID,
+                "seconds_until_entry_eligible":None,"current_window":previous.contract_id,
+                "window_end_utc":previous.window_end.isoformat() if previous.window_end else None,
+                "provider_status":"DEGRADED","persisted":False}
 
     def clear_window(self, contract_id: Optional[str]) -> None:
         """Rollover: drop per-window values so a new window visibly initialises."""
@@ -397,6 +423,20 @@ class CommandCenterState:
             if historical is not None:
                 self._historical = historical
 
+    def set_primary_selection(self, selection: Optional[dict], *, persisted: bool = False) -> None:
+        """Publish the selector's single authoritative operator state."""
+        with self._lock:
+            self._primary_selection = dict(selection) if selection else None
+            if selection:
+                op=dict(selection.get("operator_state") or {})
+                if op:
+                    op["persisted"]=bool(persisted)
+                    self._operator_state=op
+
+    def operator_state(self) -> Optional[dict]:
+        with self._lock:
+            return dict(self._operator_state) if self._operator_state else None
+
     def set_error(self, error: Optional[SystemError]) -> None:
         with self._lock:
             self._last_error = error
@@ -414,6 +454,12 @@ class CommandCenterState:
         by configured asset order. No quality comparison is performed.
         """
         with self._lock:
+            selected=(self._primary_selection or {}).get("selected") or {}
+            if selected.get("asset") in self._assets:
+                return selected["asset"]
+            strongest=(self._primary_selection or {}).get("strongest_candidate") or {}
+            if strongest.get("asset") in self._assets:
+                return strongest["asset"]
             entering = [self._assets[a] for a in self._order
                         if a in self._assets and self._assets[a].is_entering]
             if entering:
@@ -437,6 +483,8 @@ class CommandCenterState:
                 historical=dict(self._historical) if self._historical else None,
                 last_error=self._last_error,
                 focus=self.focus_asset(),
+                primary_selection=dict(self._primary_selection) if self._primary_selection else None,
+                operator_state=dict(self._operator_state) if self._operator_state else None,
                 demo_mode=self._status.demo_mode,
             )
 

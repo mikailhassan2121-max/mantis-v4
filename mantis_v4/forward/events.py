@@ -3,6 +3,7 @@ from enum import Enum
 from typing import Any,Callable
 class EventType(str,Enum):
  ENTRY_YES="ON_ENTRY_YES"; ENTRY_NO="ON_ENTRY_NO"; WAIT="ON_WAIT"; DATA_HOLD="ON_DATA_HOLD"
+ PRIMARY_SELECTION="ON_PRIMARY_SELECTION"
  ROLLOVER="ON_CONTRACT_ROLLOVER"; RESOLUTION="ON_RESOLUTION"; ERROR="ON_ERROR"
 @dataclass(frozen=True)
 class AppEvent: type:EventType; timestamp_utc:str; payload:dict[str,Any]

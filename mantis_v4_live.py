@@ -18,6 +18,7 @@ import argparse,json,math,time,uuid
 from datetime import datetime,timezone
 from pathlib import Path
 import numpy as np
+from mantis_v4.selection import SELECTION_POLICY_ID,select_primary
 from mantis_v4.clock import Clock,Instant,load_timezone
 from mantis_v4.config import MantisConfig
 from mantis_v4.contracts import ContractWindow
@@ -78,6 +79,7 @@ def build_parser():
  ui.add_argument("--no-voice",action="store_true",help="disable spoken announcements")
  ui.add_argument("--no-startup",action="store_true",help="skip the initialization sequence")
  ui.add_argument("--diagnostics",action="store_true",help="show the advanced diagnostics panel")
+ ui.add_argument("--operator-diagnostics",action="store_true",help="log operator-state/event propagation (development only)")
  ui.add_argument("--focus",default=None,metavar="ASSET",help="asset shown in the primary decision area by default")
  ui.add_argument("--profile",choices=["default","quiet","diagnostic"],default="default",help="small presentation/runtime profile")
  modes=ap.add_argument_group("safe modes (never write forward records)")
@@ -159,6 +161,13 @@ def run_demo(ui_config,cfg,args):
  state.log("INFO","SYSTEM","MANTIS ONLINE","demo / synthetic data")
  audio=build_audio(ui_config); voice=build_voice(ui_config); bus=EventBus()
  router=AlertRouter(state,audio,voice,ui_config).attach(bus)
+ if args.operator_diagnostics:
+  def trace_event(event):
+   payload=event.payload or {}
+   print("MANTIS_OPERATOR "+json.dumps({"timestamp":event.timestamp,"event_type":event.type.value,
+    "asset":payload.get("asset"),"side":payload.get("side"),"contract_id":payload.get("contract_id"),
+    "source":"EventBus","classification":"primary selection" if event.type is EventType.PRIMARY_SELECTION else "qualification" if event.type in (EventType.ENTRY_YES,EventType.ENTRY_NO) else "system"},default=str))
+  for traced_type in EventType: bus.subscribe(traced_type,trace_event)
 
  web=ui_config.ui_mode=="web" and ui_config.ui_enabled and not args.once
  server=None; center=None
@@ -168,7 +177,7 @@ def run_demo(ui_config,cfg,args):
   center=CommandCenter(state,ui_config,local_timezone=cfg.contract_timezone)
   if not args.once: center.start()
 
- feed=DemoFeed(assets); tick=0
+ feed=DemoFeed(assets); tick=0; last_primary=None
  try:
   if server is not None and ui_config.web_open_browser and getattr(server,"browser_process",None) is not None:
    # The browser owns presentation READY. Synthetic state remains still while
@@ -184,7 +193,11 @@ def run_demo(ui_config,cfg,args):
   while True:
    snapshots=feed.snapshots()
    for snapshot in snapshots: state.update_from_snapshot(snapshot,synthetic=True)
-   emit_demo_events(bus,snapshots)
+   selection=select_primary(snapshots); state.set_primary_selection(selection)
+   chosen=selection.get("selected"); primary_key=(chosen or {}).get("asset"),(chosen or {}).get("contract_id")
+   if chosen and primary_key!=last_primary:
+    bus.emit(AppEvent(EventType.PRIMARY_SELECTION,snapshots[0].timestamp_utc,chosen))
+    last_primary=primary_key
    emit_demo_lifecycle(bus,snapshots,tick)
    provider,detail=demo_provider_state(tick)
    state.record_scan(underlying_state=provider,underlying_detail=detail,
@@ -240,6 +253,10 @@ def main():
   results=self_test(root); print(render(results,"MANTIS SELF-TEST")); return exit_code(results)
  if args.test_alerts: return run_test_alerts(ui_config)
  cfg=MantisConfig.load()
+ # Operator live universe is versioned and intentionally narrower than the
+ # historical research universe. Historical ADA records remain readable.
+ cfg.assets=list(__import__("mantis_v4.selection",fromlist=["LIVE_ASSETS"]).LIVE_ASSETS)
+ cfg.enabled_assets=list(cfg.assets)
  if not cfg.voice_enabled: ui_config.voice_enabled=False
  if args.demo: return run_demo(ui_config,cfg,args)
 
@@ -256,14 +273,16 @@ def main():
  print(f"WEBULL ................. {auth}")
 
  clock=Clock(); tz=load_timezone(cfg.contract_timezone)
- store=ForwardStore(root/args.forward_dir); bus=EventBus()
+ store=ForwardStore(root/args.forward_dir); bus=EventBus(); qualification_bus=EventBus()
+ for forwarded in (EventType.ROLLOVER,EventType.RESOLUTION):
+  qualification_bus.subscribe(forwarded,bus.emit)
  market=YFinanceMarketDataProvider(interval=cfg.bar_interval,bootstrap_period=cfg.bootstrap_period,refresh_period=cfg.refresh_period,min_candles=cfg.min_candles,max_cache_rows=cfg.max_cache_rows,timeout_seconds=cfg.network_timeout_seconds,max_retries=cfg.max_retries,backoff_seconds=cfg.retry_backoff_seconds,cooldown_seconds=cfg.provider_cooldown_seconds)
  webull=WebullEconomicsProvider(cfg.credentials); manual=ManualEconomicsProvider(root/args.manual_economics)
  economics=EconomicsProviderChain([webull,manual,ProxyEconomicsProvider()])
- engine=ForwardEngine(store,ForwardConfig(cfg.scan_interval_seconds,cfg.max_data_age_seconds,cfg.contract_timezone),events=bus,repo=root,
+ engine=ForwardEngine(store,ForwardConfig(cfg.scan_interval_seconds,cfg.max_data_age_seconds,cfg.contract_timezone),events=qualification_bus,repo=root,
   run_metadata={"asset_universe":list(cfg.active_assets),"config_profile":args.profile,
    "provider_mode":"yahoo","economics_provider_mode":"webull/manual/proxy",
-   "webull_auth_status":webull.status,"demo":False})
+   "webull_auth_status":webull.status,"selection_policy":SELECTION_POLICY_ID,"demo":False})
  # Rebuild crossing state from immutable observations after restart.
  crossings={}; last_side={}
  for o in store.read("observations"):
@@ -326,10 +345,16 @@ def main():
   except Exception: pass
 
  persistence_safe=True
+ selection_window=None
  try:
   while True:
    persistence_failed=False
    instant=clock.capture(); window=ContractWindow.for_instant(instant,tz,cfg.contract_window_minutes)
+   if selection_window!=window.contract_id:
+    state.set_primary_selection({"selection_policy":SELECTION_POLICY_ID,"status":"NO TRADE",
+     "selected":None,"strongest_candidate":None,"candidates":[],"earliest_entry_in_seconds":max(0,window.seconds_remaining(instant)-300)})
+    selection_window=window.contract_id
+   cycle_snapshots=[]
    for asset in cfg.active_assets:
     try:
      started=time.monotonic(); bars=market.get_bars(asset,instant); latency=time.monotonic()-started
@@ -342,6 +367,7 @@ def main():
       _record_window_event(store,engine.run_id,asset,window,instant,"INSUFFICIENT DATA","AWAITING_FIRST_SCAN")
       _hold(state,bus,asset,instant,"AWAITING_FIRST_SCAN"); continue
      snap=engine.process(state_obj)
+     cycle_snapshots.append(snap)
      _present(state,center,snap,latency)
      for pending in store.unresolved_contracts(asset):
       observations=[o for o in store.read("observations") if o.get("contract_id")==pending["contract_id"] and o.get("asset")==asset]
@@ -358,6 +384,29 @@ def main():
      _hold(state,bus,asset,instant,"UNDERLYING_DATA_UNAVAILABLE")
      if isinstance(exc,OSError):
       persistence_failed=True; persistence_safe=False; break
+   selection=select_primary(cycle_snapshots) if cycle_snapshots else None
+   existing=store.primary_selection(window.contract_id)
+   if existing:
+    selection=existing.get("selection",selection)
+   if selection is not None:
+    state.set_primary_selection(selection,persisted=bool(existing))
+    if args.operator_diagnostics:
+     status=state.snapshot().status
+     print("MANTIS_OPERATOR "+json.dumps({"timestamp":instant.utc.isoformat(),"event_type":"OPERATOR_STATE",
+      "source":"main.selector","operator_state":state.operator_state(),
+      "voice_counters":{"received":status.voice_events_received,"suppressed":status.voice_events_suppressed,
+       "actionable":status.actionable_voice_events,"primary_created":status.primary_selections_created}},default=str))
+   chosen=selection.get("selected") if selection else None
+   if chosen and not existing:
+    import hashlib
+    selection_id=hashlib.sha256(f"{window.contract_id}|{SELECTION_POLICY_ID}".encode()).hexdigest()
+    record={"selection_id":selection_id,"run_id":engine.run_id,"contract_id":window.contract_id,
+     "timestamp_utc":instant.utc.isoformat(),"selection_policy":SELECTION_POLICY_ID,
+     "asset_universe":list(cfg.active_assets),"selection":selection}
+    if store.append("primary_selections",record,"selection_id"):
+     state.set_primary_selection(selection,persisted=True)
+     state.set_status(primary_selections_created=state.snapshot().status.primary_selections_created+1)
+     bus.emit(AppEvent(EventType.PRIMARY_SELECTION,instant.utc.isoformat(),chosen))
    if persistence_failed: break
    try:
     store.append("provider_health",{"health_id":str(uuid.uuid4()),"timestamp_utc":instant.utc.isoformat(),"provider":"yahoo","state":market.health.state.value,"detail":market.health.detail,"successful_fetches":market.health.total_requests-market.health.total_failures,"failed_fetches":market.health.total_failures},"health_id")

@@ -199,6 +199,12 @@ def build_voice(config, speaker=None):
 def phrase_entry(asset: str, side: str) -> str:
     return f"MANTIS. {spoken_asset(asset)}. Enter {side.title()}."
 
+def phrase_primary_selection(asset: str, side: str, ask=None, probability=None) -> str:
+    line=f"MANTIS. Primary selection. {spoken_asset(asset)}. Buy {side.title()}."
+    if isinstance(ask,(int,float)): line+=f" Contract ask {int(round(ask*100))} cents."
+    if isinstance(probability,(int,float)): line+=f" Model probability {probability*100:.1f} percent."
+    return line
+
 
 def phrase_data_hold(asset: str, reason: str = "") -> str:
     if "STALE" in str(reason).upper():

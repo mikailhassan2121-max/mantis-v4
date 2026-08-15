@@ -4,6 +4,11 @@
 
 Research-grade 15-minute crypto event-contract probability, risk, and advisory engine for BTC, ETH, SOL, ADA, and XRP.
 
+The current operator live universe is BTC, ETH, SOL, and XRP. ADA remains part of historical
+research datasets but is excluded from live selection. Frozen per-asset qualification is followed
+by `PRIMARY_SELECTOR_V1`, which can publish at most one economically validated operator selection
+per 15-minute window.
+
 > **OBSERVATION ONLY — NO AUTOMATED EXECUTION.** MANTIS never places an order. It observes, classifies, records forward evidence, and presents advisory states.
 
 ## Quick start for Windows

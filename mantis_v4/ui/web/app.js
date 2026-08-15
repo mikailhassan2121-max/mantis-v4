@@ -77,9 +77,8 @@
             var previous = state.lastDecisions[v.asset];
             var key = v.final.key;
             if (previous !== undefined && previous !== key) {
-                if (key === "enter_yes") A.play("enter_yes", 5);
-                else if (key === "enter_no") A.play("enter_no", 5);
-                else if (key === "data_hold") A.play("data_hold", 15);
+                // Per-asset qualification is not an operator action.
+                if (key === "data_hold") A.play("data_hold", 15);
                 else if (key === "no_trade") A.play("warning", 15);
                 // WAIT is deliberately silent: it is the most common state.
             }
@@ -91,6 +90,13 @@
             }
             state.lastContract[v.asset] = v.contract_id;
         });
+
+        var current=(snapshot.operator_state || {}).primary_selection;
+        var identity=current ? [current.contract_id,current.asset,current.side].join("|") : "";
+        if (identity && identity !== state.lastPrimarySelection) {
+            A.play(current.side === "NO" ? "enter_no" : "enter_yes",5);
+        }
+        state.lastPrimarySelection=identity;
 
         if (snapshot.error) A.play("critical", 20);
     }
@@ -159,6 +165,10 @@
     function apply(snapshot) {
         var first = state.snapshot === null;
         state.snapshot = snapshot;
+        if (snapshot.presentation && snapshot.presentation.operator_diagnostics) {
+            console.info("MANTIS_OPERATOR", "FRONTEND_RECEIVED", snapshot.sequence,
+                snapshot.operator_state || null);
+        }
         var serverNow = Date.parse(snapshot.server_time_utc);
         if (!Number.isNaN(serverNow)) state.serverOffsetMs = serverNow - Date.now();
 

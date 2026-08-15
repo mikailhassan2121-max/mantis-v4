@@ -44,7 +44,7 @@ class TestConfigLoading(unittest.TestCase):
         config = MantisConfig.load(local_file=Path("/nonexistent"), environ={})
         config.validate()
         self.assertIn("BTC-USD", config.active_assets)
-        self.assertIn("ADA-USD", config.active_assets)   # section 26J
+        self.assertNotIn("ADA-USD", config.active_assets) # historical only; excluded live
         self.assertIn("XRP-USD", config.active_assets)   # preserved, configurable
 
     def test_enabled_assets_filters_display_set(self):

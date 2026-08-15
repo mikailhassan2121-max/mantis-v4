@@ -101,7 +101,7 @@ class MantisConfig:
     # Master prompt section 26J adds ADA and asks that XRP be preserved as
     # configurable rather than deleted. Only enabled assets are displayed.
     assets: list[str] = field(
-        default_factory=lambda: ["BTC-USD", "ETH-USD", "SOL-USD", "ADA-USD", "XRP-USD"]
+        default_factory=lambda: ["BTC-USD", "ETH-USD", "SOL-USD", "XRP-USD"]
     )
     enabled_assets: Optional[list[str]] = None  # None => all of `assets`
 

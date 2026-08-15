@@ -118,6 +118,7 @@ def _timing(rows):
 def forward_report(store: ForwardStore, n_boot=400):
     observations = store.read("observations"); entries = store.read("entries")
     resolutions = store.read("resolutions"); events = store.read("window_events")
+    primary_selections = store.read("primary_selections")
     latest = {}
     for observation in observations: latest[_key(observation)] = observation
     all_keys = set(latest) | {_key(e) for e in events} | {_key(r) for r in resolutions}
@@ -151,6 +152,9 @@ def forward_report(store: ForwardStore, n_boot=400):
         "classification_accuracy": resolved_stats["accuracy"], "ci_low": resolved_stats["ci_low"],
         "ci_high": resolved_stats["ci_high"], "correct": resolved_stats["correct"],
         "incorrect": resolved_stats["incorrect"], "distinct_windows": resolved_stats["distinct_windows"],
+        "primary_selection_policy": "PRIMARY_SELECTOR_V1",
+        "primary_selection_count": len(primary_selections),
+        "per_asset_qualification_count": len(entries),
     }
     report["yes"] = _stats([r for r in resolved_entries if r.get("side") == "YES"], n_boot=100)
     report["no"] = _stats([r for r in resolved_entries if r.get("side") == "NO"], n_boot=100)
@@ -256,11 +260,12 @@ def manifest(store: ForwardStore):
                        "schema_version": store.SCHEMA_VERSIONS[name]}
     contracts = {_key(o) for o in rows["observations"]} | {_key(e) for e in rows["window_events"]}
     policies = sorted({str(x.get("policy_identifier")) for name in ("runs", "entries") for x in rows[name] if x.get("policy_identifier")})
+    selection_policies=sorted({str(x.get("selection_policy")) for x in rows["primary_selections"] if x.get("selection_policy")})
     return {"first_forward_timestamp": min(stamps) if stamps else None, "latest_forward_timestamp": max(stamps) if stamps else None,
             "files": files, "run_count": len(rows["runs"]), "observation_count": len(rows["observations"]),
             "contract_count": len(contracts), "entry_count": len(rows["entries"]),
             "resolution_count": len(rows["resolutions"]), "unresolved_count": len(store.unresolved_entries()),
-            "policy_versions": policies}
+            "policy_versions": policies, "selection_policy_versions": selection_policies}
 
 
 def audit_contract(store, contract_id):

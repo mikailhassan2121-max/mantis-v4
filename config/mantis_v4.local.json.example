@@ -18,7 +18,7 @@
     "than being silently ignored."
   ],
 
-  "enabled_assets": ["BTC-USD", "ETH-USD", "SOL-USD", "ADA-USD", "XRP-USD"],
+  "enabled_assets": ["BTC-USD", "ETH-USD", "SOL-USD", "XRP-USD"],
 
   "scan_interval_seconds": 5.0,
   "network_timeout_seconds": 8.0,

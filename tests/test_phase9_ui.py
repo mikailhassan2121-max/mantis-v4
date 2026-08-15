@@ -99,7 +99,7 @@ class HookRoutingTests(unittest.TestCase):
   router,state,audio,_=router_with()
   bus=EventBus(); router.attach(bus)
   bus.emit(AppEvent(EventType.ENTRY_YES,NOW.isoformat(),{"asset":"BTC-USD","side":"YES"}))
-  self.assertEqual([e.message for e in state.snapshot().events],["ENTER YES"])
+  self.assertEqual([e.message for e in state.snapshot().events],["QUALIFIED YES"])
   self.assertEqual(audio.played,["enter_yes"])
 
  def test_engine_entry_event_reaches_the_event_log(self):
@@ -108,7 +108,7 @@ class HookRoutingTests(unittest.TestCase):
    engine=ForwardEngine(ForwardStore(Path(tmp)),events=bus,run_id="run")
    engine.process(asset_state())
    messages=[e.message for e in state.snapshot().events]
-   self.assertIn("ENTER YES",messages)
+   self.assertIn("QUALIFIED YES",messages)
    self.assertEqual(audio.played,["enter_yes"])
 
 
@@ -117,7 +117,7 @@ class AlertBehaviourTests(unittest.TestCase):
   router,state,audio,voice=router_with(startup_alert_suppression_seconds=60.0)
   router.handle(AppEvent(EventType.ENTRY_YES,NOW.isoformat(),
    {"asset":"BTC-USD","side":"YES"}))
-  self.assertEqual(state.snapshot().events[-1].message,"ENTER YES")
+  self.assertEqual(state.snapshot().events[-1].message,"QUALIFIED YES")
   self.assertEqual(audio.played,[])
   self.assertEqual(voice.spoken,[])
 
@@ -126,16 +126,16 @@ class AlertBehaviourTests(unittest.TestCase):
   router.handle(AppEvent(EventType.ENTRY_YES,NOW.isoformat(),
    {"asset":"BTC-USD","side":"YES","seconds_remaining":142,"model_probability":.972}))
   self.assertEqual(audio.played,["enter_yes"])
-  self.assertEqual(voice.spoken,["MANTIS. Bitcoin. Enter Yes."])
+  self.assertEqual(voice.spoken,[])
   entry=state.snapshot().events[-1]
-  self.assertEqual((entry.severity,entry.message),("ACTION","ENTER YES"))
+  self.assertEqual((entry.severity,entry.message),("ACTION","QUALIFIED YES"))
   self.assertIn("T-142s",entry.detail)
 
  def test_enter_no_alert_is_distinct(self):
   router,_,audio,voice=router_with()
   router.handle(AppEvent(EventType.ENTRY_NO,NOW.isoformat(),{"asset":"ETH-USD","side":"NO"}))
   self.assertEqual(audio.played,["enter_no"])
-  self.assertEqual(voice.spoken,["MANTIS. Ethereum. Enter No."])
+  self.assertEqual(voice.spoken,[])
   self.assertNotEqual(ui_audio.CUES["enter_yes"],ui_audio.CUES["enter_no"])
 
  def test_wait_is_silent(self):
@@ -772,7 +772,7 @@ class UnchangedSubsystemTests(unittest.TestCase):
   self.assertTrue(cfg.observation_only)
   self.assertEqual(set(ForwardStore.FILES),
                    {"observations","entries","resolutions","provider_health","runs",
-                    "window_events","session_events"})
+                    "window_events","session_events","primary_selections"})
 
  def test_phase8_observation_schema_unchanged(self):
   with tempfile.TemporaryDirectory() as tmp:

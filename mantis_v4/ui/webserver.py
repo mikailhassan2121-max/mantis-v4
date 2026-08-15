@@ -99,6 +99,7 @@ class CommandCenterServer:
         self._missing_branding: set[str] = set()
         self._presentation_token = secrets.token_urlsafe(24)
         self.failures = 0
+        self._sequence = 0
         self.disabled_reason: Optional[str] = None
 
     # -- lifecycle ----------------------------------------------------------
@@ -148,6 +149,8 @@ class CommandCenterServer:
             clients = len(self._clients)
         payload = webmodel.snapshot_payload(self.state.snapshot(), self.config,
                                             datetime.now(UTC), clients)
+        self._sequence += 1
+        payload["sequence"] = self._sequence
         payload["presentation"]["ready_token"] = self._presentation_token
         return payload
 

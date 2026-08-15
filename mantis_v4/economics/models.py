@@ -26,6 +26,7 @@ class ContractEconomics:
     reference_verified:bool; quote_verified:bool
     yes_depth:Optional[float]=None; no_depth:Optional[float]=None
     fee_per_contract:Optional[float]=None; fee_status:FeeStatus=FeeStatus.UNKNOWN
+    fee_provenance:Optional[str]=None
     slippage_per_contract:Optional[float]=None; slippage_status:SlippageStatus=SlippageStatus.NOT_MODELED
 
     def ask(self,side:str)->float: return self.yes_ask if side.upper()=="YES" else self.no_ask
@@ -99,16 +100,20 @@ def assess_economics(e:Optional[ContractEconomics],*,side:str,model_probability:
         return EconomicAssessment(side,model_probability,lower_bound,e.ask(side),None,None,None,None,None,None,None,None,None,e.payout,e.quote_age(now),status,"UNAVAILABLE",e.fee_status.value,e.slippage_status.value,book,errors)
     ask=e.ask(side); gross=expected_value(model_probability,ask,e.payout); lcbgross=expected_value(lower_bound,ask,e.payout)
     known_fees=e.fee_status is not FeeStatus.UNKNOWN
-    slip_known=e.slippage_status is not SlippageStatus.NOT_MODELED
-    costs=(e.fee_per_contract or 0)+(e.slippage_per_contract or 0)
-    net=expected_value(model_probability,ask,e.payout,costs) if known_fees and slip_known else None
-    lcbnet=expected_value(lower_bound,ask,e.payout,costs) if known_fees and slip_known else None
-    be=break_even_probability(ask,e.payout,costs if known_fees and slip_known else 0)
+    # Hold-to-resolution opening economics include the verified unavoidable
+    # opening fee. Unmodelled slippage stays prominently labelled; it is not
+    # silently invented and does not erase the known fee calculation.
+    costs=(e.fee_per_contract or 0)+(e.slippage_per_contract or 0 if e.slippage_status is not SlippageStatus.NOT_MODELED else 0)
+    net=expected_value(model_probability,ask,e.payout,costs) if known_fees else None
+    lcbnet=expected_value(lower_bound,ask,e.payout,costs) if known_fees else None
+    be=break_even_probability(ask,e.payout,costs if known_fees else 0)
     point_for_status=net if net is not None else gross; lcb_for_status=lcbnet if lcbnet is not None else lcbgross
     edge=model_probability-be; lcb_edge=lower_bound-be
-    status=(EconomicStatus.NEGATIVE_EV if point_for_status<=0 else EconomicStatus.NON_ROBUST_EV if lcb_for_status<=0
+    impossible=known_fees and ask+(e.fee_per_contract or 0)>=e.payout
+    status=(EconomicStatus.NEGATIVE_EV if impossible or point_for_status<=0 else EconomicStatus.NON_ROBUST_EV if lcb_for_status<=0
             else EconomicStatus.MARGINAL_EV if lcb_edge<marginal_edge else EconomicStatus.ROBUST_POSITIVE_EV)
     label="NET_EV" if net is not None else "EV_BEFORE_UNVERIFIED_FEES"
     acquisition=ask+costs if net is not None else ask
     return EconomicAssessment(side,model_probability,lower_bound,ask,be,edge,lcb_edge,gross,net,lcbgross,lcbnet,
-      point_for_status/acquisition,acquisition,e.payout,e.quote_age(now),status,label,e.fee_status.value,e.slippage_status.value,book,())
+      point_for_status/acquisition,acquisition,e.payout,e.quote_age(now),status,label,e.fee_status.value,e.slippage_status.value,book,
+      ("ECONOMICALLY_IMPOSSIBLE",) if impossible else ())

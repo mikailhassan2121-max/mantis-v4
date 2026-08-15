@@ -8,6 +8,7 @@ from typing import Optional,Sequence
 from ..clock import parse_iso_utc
 from ..config import WebullCredentials
 from .models import ContractEconomics,FeeStatus,SlippageStatus
+from .fees import WEBULL_EVENT_FEE_PROVENANCE,WEBULL_EVENT_OPENING_FEE
 
 class EconomicsProvider(ABC):
     name="economics"; priority=100
@@ -45,7 +46,8 @@ class ManualEconomicsProvider(EconomicsProvider):
             return ContractEconomics(asset=str(r["asset"]),contract_id=str(r["contract_id"]),reference=vals["reference"],resolution_time=rt,
               settlement_rule=str(r["settlement_rule"]),yes_bid=vals["yes_bid"],yes_ask=vals["yes_ask"],no_bid=vals["no_bid"],no_ask=vals["no_ask"],payout=vals["payout"],quote_timestamp=qt,quote_source=str(r["source"]),reference_verified=True,quote_verified=True,
               yes_depth=float(r["yes_depth"]) if r.get("yes_depth") is not None else None,no_depth=float(r["no_depth"]) if r.get("no_depth") is not None else None,
-              fee_per_contract=float(r["fee_per_contract"]) if r.get("fee_per_contract") is not None else None,fee_status=fs,
+              fee_per_contract=float(r["fee_per_contract"]) if r.get("fee_per_contract") is not None else float(WEBULL_EVENT_OPENING_FEE),fee_status=fs if r.get("fee_per_contract") is not None else FeeStatus.VERIFIED,
+              fee_provenance=str(r.get("fee_provenance") or ("WEBULL_ORDER_PREVIEW" if r.get("fee_per_contract") is not None else WEBULL_EVENT_FEE_PROVENANCE)),
               slippage_per_contract=float(r["slippage_per_contract"]) if r.get("slippage_per_contract") is not None else None,slippage_status=ss)
         except (ValueError,TypeError): return None
     def get_economics(self,asset,contract_id,now):

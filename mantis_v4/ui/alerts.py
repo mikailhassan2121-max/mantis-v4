@@ -16,6 +16,7 @@ import time
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Optional
+from datetime import datetime, timezone
 
 from ..forward.events import AppEvent, EventBus, EventType
 from . import voice as voice_phrases
@@ -44,6 +45,7 @@ ROUTES: dict[EventType, AlertRoute] = {
     EventType.RESOLUTION: AlertRoute(Severity.NOTICE, "resolution", "resolution", "resolution"),
     EventType.ENTRY_YES: AlertRoute(Severity.ACTION, "enter_yes", "enter_yes", "enter"),
     EventType.ENTRY_NO: AlertRoute(Severity.ACTION, "enter_no", "enter_no", "enter"),
+    EventType.PRIMARY_SELECTION: AlertRoute(Severity.ACTION, "enter_yes", None, "enter"),
     EventType.WAIT: AlertRoute(Severity.INFO, "wait", None, "wait"),
     EventType.DATA_HOLD: AlertRoute(Severity.WARNING, "data_hold", "data_hold", "data_hold"),
     EventType.ERROR: AlertRoute(Severity.CRITICAL, "error", "error", "error"),
@@ -62,6 +64,7 @@ class AlertRouter:
         self._last_audio: dict[str, float] = {}
         self._last_voice: dict[str, float] = {}
         self._last_wait: dict[str, str] = {}
+        self._last_primary_selection: Optional[str] = None
         # The scanner may emit events while the cinematic browser boot is still
         # running. Log them immediately, but do not let operational tones or
         # speech collide with the curated boot soundtrack.
@@ -112,6 +115,25 @@ class AlertRouter:
         payload = event.payload or {}
         asset = str(payload.get("asset") or "")
 
+        if event.type in (EventType.ENTRY_YES, EventType.ENTRY_NO, EventType.PRIMARY_SELECTION):
+            self._bump("voice_events_received")
+        if event.type in (EventType.ENTRY_YES, EventType.ENTRY_NO):
+            # Phase-8 per-asset entries are research records, never operator commands.
+            self._bump("voice_events_suppressed")
+
+        if event.type is EventType.PRIMARY_SELECTION:
+            if not self._actionable_primary(payload):
+                self._bump("voice_events_suppressed")
+                if getattr(self.config,"operator_diagnostics",False):
+                    print("MANTIS_OPERATOR VOICE_SUPPRESSED source=AlertRouter event=ON_PRIMARY_SELECTION")
+                self.state.log(Severity.WARNING.value, asset or "SYSTEM",
+                    "PRIMARY VOICE SUPPRESSED", "authoritative persisted selection validation failed")
+                return None
+            identity=f"{payload.get('contract_id','')}|{asset}|{payload.get('side','')}"
+            with self._lock:
+                if self._last_primary_selection==identity: return None
+                self._last_primary_selection=identity
+
         if event.type is EventType.WAIT and not self._wait_changed(asset, payload):
             return None   # identical WAIT reason: keep the log readable
 
@@ -121,17 +143,60 @@ class AlertRouter:
         del self.routed[:-64]
 
         live_alerts = self._armed or time.monotonic() >= self._live_alerts_at
-        if live_alerts and route.audio_cue and self.config.audio_allows(route.audio_key):
-            if self._allow(self._last_audio, f"{route.audio_cue}:{asset}",
+        audio_cue=route.audio_cue
+        audio_key=route.audio_key
+        if event.type is EventType.PRIMARY_SELECTION:
+            audio_cue="enter_no" if str(payload.get("side")).upper()=="NO" else "enter_yes"
+            audio_key=audio_cue
+        if live_alerts and audio_cue and self.config.audio_allows(audio_key):
+            if self._allow(self._last_audio, f"{audio_cue}:{asset}",
                            self.config.audio_min_interval_seconds):
-                self.audio.play(route.audio_cue)
+                self.audio.play(audio_cue)
 
         if live_alerts and spoken and self.config.voice_allows(route.voice_key):
             if self._allow(self._last_voice, f"{route.voice_key}:{asset}",
                            self.config.voice_min_interval_seconds):
                 self.voice.say(spoken)
+                if event.type is EventType.PRIMARY_SELECTION:
+                    self._bump("actionable_voice_events")
+                    if getattr(self.config,"operator_diagnostics",False):
+                        print("MANTIS_OPERATOR VOICE_ENQUEUE source=AlertRouter event=ON_PRIMARY_SELECTION")
 
         return route.severity
+
+    def _bump(self, name: str) -> None:
+        try:
+            status=self.state.snapshot().status
+            self.state.set_status(**{name:int(getattr(status,name,0))+1})
+        except Exception:
+            pass
+
+    def _actionable_primary(self, payload: dict) -> bool:
+        """Final voice security boundary; upstream events are never trusted."""
+        try:
+            op=self.state.operator_state() or {}
+            current=op.get("primary_selection") or {}
+            if op.get("selection_policy_version") != "PRIMARY_SELECTOR_V1" or not op.get("persisted"):
+                return False
+            if current.get("asset") not in {"BTC-USD","ETH-USD","SOL-USD","XRP-USD"}:
+                return False
+            if current.get("side") not in {"YES","NO"}:
+                return False
+            if not current.get("economically_valid") or not current.get("quote_verified"):
+                return False
+            if current.get("fee_provenance") != "WEBULL_OFFICIAL_FEE_SCHEDULE":
+                return False
+            if float(current.get("net_ev") or 0) <= 0 or float(current.get("conservative_net_ev") or 0) <= 0:
+                return False
+            if any(str(current.get(k) or "") != str(payload.get(k) or "") for k in ("asset","side","contract_id")):
+                return False
+            end=op.get("window_end_utc")
+            if end:
+                parsed=datetime.fromisoformat(str(end).replace("Z","+00:00"))
+                if parsed <= datetime.now(timezone.utc): return False
+            return True
+        except Exception:
+            return False
 
     def _wait_changed(self, asset: str, payload: dict) -> bool:
         reason = str(payload.get("reason") or "")
@@ -150,7 +215,13 @@ class AlertRouter:
             probability = payload.get("model_probability")
             if isinstance(probability, (int, float)):
                 detail = f"{detail} p={probability:.1%}".strip()
-            return f"ENTER {side}", detail, voice_phrases.phrase_entry(asset, side)
+            return f"QUALIFIED {side}", detail, None
+
+        if event.type is EventType.PRIMARY_SELECTION:
+            side=str(payload.get("side") or "")
+            probability=payload.get("confidence"); ask=payload.get("ask")
+            detail=(f"ASK ${ask:.2f}  P {probability:.1%}" if isinstance(ask,(int,float)) and isinstance(probability,(int,float)) else "")
+            return f"PRIMARY SELECTION — BUY {side}", detail, voice_phrases.phrase_primary_selection(asset,side,ask,probability)
 
         if event.type is EventType.DATA_HOLD:
             reason = str(payload.get("reason") or "")
