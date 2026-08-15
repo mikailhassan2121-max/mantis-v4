@@ -83,6 +83,11 @@ def build_parser():
  modes.add_argument("--demo",action="store_true",help="run the interface on synthetic states, clearly labelled")
  modes.add_argument("--health-check",action="store_true",help="inspect installation and configuration without starting the scanner")
  modes.add_argument("--self-test",action="store_true",help="run isolated persistence/web checks without touching forward data")
+ modes.add_argument("--forward-report",action="store_true",help="print the read-only Phase 11 forward report and exit")
+ modes.add_argument("--daily-report",nargs="?",const="TODAY",metavar="YYYY-MM-DD",help="print a UTC daily forward summary and exit")
+ modes.add_argument("--forward-manifest",action="store_true",help="print forward dataset counts, schemas and hashes")
+ modes.add_argument("--audit-contract",metavar="CONTRACT_ID",help="print one contract's immutable timeline")
+ modes.add_argument("--incorrect-report",action="store_true",help="print incorrect entry-time classifications and exit")
  return ap
 
 # ---------------------------------------------------------------------------
@@ -215,6 +220,19 @@ def main():
   Severity,build_audio,build_console,build_voice)
  from mantis_v4.ui import errors as ui_errors, startup as ui_startup
  ui_config=PresentationConfig.load().apply_cli(args)
+ if args.forward_report or args.daily_report or args.forward_manifest or args.audit_contract or args.incorrect_report:
+  import json
+  from mantis_v4.forward import (ForwardStore,audit_contract,daily_report,forward_report,
+   incorrect_signals,manifest,render_manifest,render_report)
+  report_store=ForwardStore(root/args.forward_dir)
+  if args.forward_report: print(render_report(forward_report(report_store)))
+  elif args.daily_report:
+   day=None if args.daily_report=="TODAY" else args.daily_report
+   print(render_report(daily_report(report_store,day),"MANTIS PHASE 11 DAILY FORWARD SUMMARY"))
+  elif args.forward_manifest: print(render_manifest(manifest(report_store)))
+  elif args.audit_contract: print(json.dumps(audit_contract(report_store,args.audit_contract),indent=2,sort_keys=True))
+  else: print(json.dumps(incorrect_signals(report_store),indent=2,sort_keys=True))
+  return 0
  if args.health_check:
   from mantis_v4.health import exit_code,inspect,render
   results=inspect(root,Path(args.forward_dir)); print(render(results)); return exit_code(results)
@@ -240,10 +258,13 @@ def main():
 
  clock=Clock(); tz=load_timezone(cfg.contract_timezone)
  store=ForwardStore(root/args.forward_dir); bus=EventBus()
- engine=ForwardEngine(store,ForwardConfig(cfg.scan_interval_seconds,cfg.max_data_age_seconds,cfg.contract_timezone),events=bus,repo=root)
  market=YFinanceMarketDataProvider(interval=cfg.bar_interval,bootstrap_period=cfg.bootstrap_period,refresh_period=cfg.refresh_period,min_candles=cfg.min_candles,max_cache_rows=cfg.max_cache_rows,timeout_seconds=cfg.network_timeout_seconds,max_retries=cfg.max_retries,backoff_seconds=cfg.retry_backoff_seconds,cooldown_seconds=cfg.provider_cooldown_seconds)
  webull=WebullEconomicsProvider(cfg.credentials); manual=ManualEconomicsProvider(root/args.manual_economics)
  economics=EconomicsProviderChain([webull,manual,ProxyEconomicsProvider()])
+ engine=ForwardEngine(store,ForwardConfig(cfg.scan_interval_seconds,cfg.max_data_age_seconds,cfg.contract_timezone),events=bus,repo=root,
+  run_metadata={"asset_universe":list(cfg.active_assets),"config_profile":args.profile,
+   "provider_mode":"yahoo","economics_provider_mode":"webull/manual/proxy",
+   "webull_auth_status":webull.status,"demo":False})
  # Rebuild crossing state from immutable observations after restart.
  crossings={}; last_side={}
  for o in store.read("observations"):
@@ -314,14 +335,16 @@ def main():
     try:
      started=time.monotonic(); bars=market.get_bars(asset,instant); latency=time.monotonic()-started
      if bars is None or bars.is_empty:
+      _record_window_event(store,engine.run_id,asset,window,instant,"PROVIDER FAILURE","UNDERLYING_DATA_UNAVAILABLE")
       _hold(state,bus,asset,instant,"UNDERLYING_DATA_UNAVAILABLE"); continue
      state_obj,visible=compute_asset_state(asset=asset,bars=bars,latency=latency,instant=instant,
       window=window,cfg=cfg,crossings=crossings,last_side=last_side,economics=economics,market=market)
      if state_obj is None:
+      _record_window_event(store,engine.run_id,asset,window,instant,"INSUFFICIENT DATA","AWAITING_FIRST_SCAN")
       _hold(state,bus,asset,instant,"AWAITING_FIRST_SCAN"); continue
      snap=engine.process(state_obj)
      _present(state,center,snap,latency)
-     for pending in [x for x in store.unresolved_entries() if x.get("asset")==asset]:
+     for pending in store.unresolved_contracts(asset):
       observations=[o for o in store.read("observations") if o.get("contract_id")==pending["contract_id"] and o.get("asset")==asset]
       if not observations: continue
       end=datetime.fromisoformat(observations[0]["window_end"])
@@ -332,6 +355,7 @@ def main():
     except Exception as exc:
      # One asset's failure never ends the scan or the run.
      report_error(exc,component=f"scan {asset}",provider="yahoo")
+     _record_window_event(store,engine.run_id,asset,window,instant,"PROVIDER FAILURE",type(exc).__name__)
      _hold(state,bus,asset,instant,"UNDERLYING_DATA_UNAVAILABLE")
      if isinstance(exc,OSError):
       persistence_failed=True; persistence_safe=False; break
@@ -351,6 +375,11 @@ def main():
   state.log(Severity.NOTICE.value,"SYSTEM","SHUTDOWN REQUESTED","forward records intact")
  finally:
   from mantis_v4.runtime import shutdown_lines,stop_browser
+  stopped_at=datetime.now(UTC)
+  try:
+   store.append("session_events",{"session_event_id":f"{engine.run_id}:STOP","run_id":engine.run_id,
+    "timestamp_utc":stopped_at.isoformat(),"event":"STOP","clean_shutdown":persistence_safe},"session_event_id")
+  except OSError: persistence_safe=False
   reporter_stopped=reporter.stop() if reporter is not None else None
   browser=getattr(server,"browser_process",None) if server is not None else None
   if center is not None:
@@ -365,6 +394,8 @@ def main():
    server=None if server is None else True,reporter=reporter_stopped,
    audio=not getattr(audio,"is_alive",False),voice=not getattr(voice,"is_alive",False),
    browser=browser_stopped): print(line)
+  try: _print_session_summary(store,engine.run_id)
+  except Exception: pass
  return 0
 
 # ---------------------------------------------------------------------------
@@ -389,6 +420,34 @@ def _hold(state,bus,asset,instant,reason):
  except Exception: pass
  try: bus.emit(AppEvent(EventType.DATA_HOLD,instant.utc.isoformat(),{"asset":asset,"reason":reason}))
  except Exception: pass
+
+def _record_window_event(store,run_id,asset,window,instant,status,reason):
+ """Append one immutable category per asset/window/status; never an observation."""
+ import hashlib
+ token=f"{contract_key(window.contract_id,asset)}|{status}"
+ event_id=hashlib.sha256(token.encode()).hexdigest()
+ store.append("window_events",{"window_event_id":event_id,"run_id":run_id,"asset":asset,
+  "contract_id":window.contract_id,"window_start":window.start_utc.isoformat(),
+  "window_end":window.end_utc.isoformat(),"timestamp_utc":instant.utc.isoformat(),
+  "status":status,"reason":reason},"window_event_id")
+
+def contract_key(contract_id,asset): return f"{contract_id}|{asset}"
+
+def _print_session_summary(store,run_id):
+ observations=[o for o in store.read("observations") if o.get("run_id")==run_id]
+ entries=[e for e in store.read("entries") if e.get("run_id")==run_id]
+ resolutions=[r for r in store.read("resolutions") if r.get("run_id")==run_id]
+ correct=sum(r.get("classification_correct") is True for r in resolutions)
+ incorrect=sum(r.get("classification_correct") is False for r in resolutions)
+ holds=sum(e.get("run_id")==run_id and e.get("status")=="DATA HOLD" for e in store.read("window_events"))
+ provider=sum(e.get("run_id")==run_id and e.get("status")=="PROVIDER FAILURE" for e in store.read("window_events"))
+ print("MANTIS SESSION COMPLETE")
+ print(f"WINDOWS OBSERVED ....... {len({(o.get('contract_id'),o.get('asset')) for o in observations})}")
+ print(f"SIGNALS ISSUED ......... {len(entries)}")
+ print(f"RESOLVED / UNRESOLVED .. {len(resolutions)} / {sum(1 for e in entries if not any((r.get('contract_id'),r.get('asset'))==(e.get('contract_id'),e.get('asset')) for r in resolutions))}")
+ print(f"CORRECT / INCORRECT .... {correct} / {incorrect}")
+ print(f"DATA HOLDS / PROVIDER .. {holds} / {provider}")
+ print("FORWARD LOG STATUS ..... SAFE")
 
 def _sync_health(state,router,market,instant):
  try:

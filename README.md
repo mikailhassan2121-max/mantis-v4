@@ -26,6 +26,9 @@ python mantis_v4_live.py --no-audio       # suppress tones
 python mantis_v4_live.py --health-check   # installation/config diagnostics only
 python mantis_v4_live.py --self-test      # isolated temp persistence + web checks
 python mantis_v4_live.py --profile quiet  # UI on, sound and speech off
+python mantis_v4_live.py --forward-report # read-only Phase 11 evidence summary
+python mantis_v4_live.py --daily-report   # today's UTC forward summary
+python mantis_v4_live.py --forward-manifest # counts, schemas, and file hashes
 ```
 
 ## Architecture
@@ -36,6 +39,7 @@ ECONOMICS     Phase 7 quote/EV semantics             mantis_v4/economics
 STATE         Phase 8 append-only forward records   mantis_v4/forward
 PRESENTATION  Phase 9 local HTTP/SSE command center mantis_v4/ui
 RUNTIME       Phase 10 health/lifecycle/recovery    mantis_v4/health.py, runtime.py
+EVIDENCE      Phase 11 read-only forward analytics mantis_v4/forward/phase11.py
 ```
 
 Nothing in `mantis_v4/ui` computes a probability, EV, edge, threshold, or contract boundary. Presentation, audio, voice, browser, and SSE failures are isolated from scanning.
@@ -50,6 +54,7 @@ Nothing in `mantis_v4/ui` computes a probability, EV, edge, threshold, or contra
 | 8 | Forward validation | `research/PHASE8_LIVE_ARCHITECTURE.md`, `PHASE8_FAILURE_RECOVERY.md` |
 | 9 | Command center | `research/PHASE9_UI_ARCHITECTURE.md`, `PHASE9_OPERATOR_GUIDE.md` |
 | 10 | Production hardening | `research/PHASE10_HARDENING.md`, `PHASE10_FAILURE_RECOVERY.md`, `PHASE10_INSTALLATION.md`, `PHASE10_RELEASE_CHECKLIST.md` |
+| 11 | Live forward observation | `research/PHASE11_FORWARD_VALIDATION.md`, `PHASE11_OPERATOR_GUIDE.md` |
 
 ## Verification
 

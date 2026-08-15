@@ -52,7 +52,7 @@ def compare_historical(report:dict,observations:list[dict]):
  return {"status":"FORWARD_REGIME_SHIFT_WARNING" if warnings else "FORWARD_REGIME_NORMAL","warnings":warnings,"historical_accuracy":.9658,"historical_coverage":.6373,**context}
 def export_csv(store:ForwardStore,out_dir:Path):
  out_dir=Path(out_dir); out_dir.mkdir(parents=True,exist_ok=True); paths=[]
- for name in ("observations","entries","resolutions","provider_health","runs"):
+ for name in store.FILES:
   rows=store.read(name)
   if not rows:continue
   keys=sorted({k for r in rows for k in r if not isinstance(r.get(k),(dict,list))}); path=out_dir/f"{name}.csv"

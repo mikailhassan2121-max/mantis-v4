@@ -336,12 +336,15 @@
             list.push({ k: "STATUS", v: "NO FORWARD RECORDS YET" });
         } else {
             var ci = F.has(f.ci_low) ? "  [" + F.pct(f.ci_low) + ", " + F.pct(f.ci_high) + "]" : "";
-            list.push({ k: "SAMPLE STATUS", v: f.sample_label || DASH, cls: "warnc" });
-            list.push({ k: "CONTRACTS OBSERVED", v: String(f.total_contracts_observed) });
+            list.push({ k: "SAMPLE STATUS", v: f.forward_status || f.sample_label || DASH, cls: "warnc" });
+            list.push({ k: "FORWARD SAMPLE", v: String(f.resolved_entries || 0) });
+            list.push({ k: "ELIGIBLE WINDOWS", v: String(f.eligible_windows || 0) });
             list.push({ k: "ENTRY EVENTS", v: String(f.total_entry_events) });
-            list.push({ k: "RESOLVED ENTRIES", v: String(f.resolved_entries) });
-            list.push({ k: "ABSTENTION RATE", v: F.pct(f.abstention_rate) });
-            list.push({ k: "CLASSIFICATION ACC", v: F.pct(f.classification_accuracy, 2) + ci });
+            list.push({ k: "COVERAGE", v: F.pct(f.coverage) });
+            list.push({ k: "RESOLVED", v: String(f.resolved_entries) });
+            list.push({ k: "ACCURACY", v: F.has(f.classification_accuracy) ? F.pct(f.classification_accuracy, 1) + ci : "INSUFFICIENT SAMPLE" });
+            list.push({ k: "DRIFT STATUS", v: f.drift ? F.words(f.drift.status) : "INSUFFICIENT SAMPLE", cls: "warnc" });
+            list.push({ k: "DATA HOLDS / PROVIDER", v: (f.data_hold_count || 0) + " / " + (f.provider_failure_count || 0) });
             var yes = f.yes || {}, no = f.no || {};
             list.push({ k: "YES ACCURACY", v: F.pct(yes.accuracy) + " (n=" + (yes.n || 0) + ")" });
             list.push({ k: "NO ACCURACY", v: F.pct(no.accuracy) + " (n=" + (no.n || 0) + ")" });
@@ -621,10 +624,10 @@
         rows(document.getElementById("band_forward_rows"), !f ? [
             { k: "STATUS", v: "NO FORWARD RECORDS YET" }
         ] : [
-            { k: "SAMPLE", v: f.sample_label || DASH, cls: "warnc" },
-            { k: "CONTRACTS / ENTRIES", v: f.total_contracts_observed + " / " + f.total_entry_events },
-            { k: "RESOLVED / ABSTAIN", v: f.resolved_entries + " / " + F.pct(f.abstention_rate) },
-            { k: "CLASSIFICATION ACC", v: F.pct(f.classification_accuracy, 2) +
+            { k: "SAMPLE / STATUS", v: f.resolved_entries + " / " + (f.forward_status || f.sample_label || DASH), cls: "warnc" },
+            { k: "ENTRIES / COVERAGE", v: f.total_entry_events + " / " + F.pct(f.coverage) },
+            { k: "RESOLVED / HOLDS", v: f.resolved_entries + " / " + (f.data_hold_count || 0) },
+            { k: "ACCURACY / DRIFT", v: (F.has(f.classification_accuracy) ? F.pct(f.classification_accuracy, 1) : "N/A") +
                 (F.has(f.ci_low) ? "  [" + F.pct(f.ci_low) + ", " + F.pct(f.ci_high) + "]" : "") }
         ]);
         rows(document.getElementById("band_hist_rows"), h ? [

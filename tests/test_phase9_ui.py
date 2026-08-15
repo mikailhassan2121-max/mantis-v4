@@ -771,7 +771,8 @@ class UnchangedSubsystemTests(unittest.TestCase):
   self.assertEqual(cfg.model_version,"NORMAL_Z_PHASE6_LOCKED")
   self.assertTrue(cfg.observation_only)
   self.assertEqual(set(ForwardStore.FILES),
-                   {"observations","entries","resolutions","provider_health","runs"})
+                   {"observations","entries","resolutions","provider_health","runs",
+                    "window_events","session_events"})
 
  def test_phase8_observation_schema_unchanged(self):
   with tempfile.TemporaryDirectory() as tmp:
