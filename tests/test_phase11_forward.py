@@ -2,9 +2,12 @@ import hashlib
 import json
 import tempfile
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
+from unittest.mock import patch
 
 from mantis_v4.clock import Instant
 from mantis_v4.contracts import ContractWindow
@@ -135,6 +138,31 @@ class Phase11ForwardTests(unittest.TestCase):
         text = (Path(__file__).parents[1]/"mantis_v4/ui/web/modules.js").read_text(encoding="utf-8")
         for token in ("FORWARD SAMPLE", "COVERAGE", "DRIFT"):
             self.assertIn(token, text)
+
+
+class LiveStartupScopingRegressionTests(unittest.TestCase):
+    def test_normal_live_path_reaches_forward_store_instantiation(self):
+        """Regression for the Phase 11 function-local ForwardStore import bug."""
+        import mantis_v4_live as live
+        class StoreReached(Exception): pass
+        argv = ["mantis_v4_live.py", "--once", "--no-ui", "--no-audio", "--no-voice",
+                "--no-startup", "--forward-dir", "data/test-phase11-startup"]
+        with patch("sys.argv", argv), \
+             patch("mantis_v4.health.inspect", return_value=[]), \
+             patch("mantis_v4.health.exit_code", return_value=0), \
+             patch.object(live, "ForwardStore", side_effect=StoreReached):
+            with self.assertRaises(StoreReached):
+                live.main()
+
+    def test_all_phase11_cli_branches_resolve_imports(self):
+        import mantis_v4_live as live
+        with tempfile.TemporaryDirectory(dir=Path(__file__).parent) as temporary:
+            relative = str(Path(temporary).relative_to(Path(__file__).parents[1]))
+            cases = (["--forward-report"], ["--daily-report"], ["--forward-manifest"],
+                     ["--incorrect-report"], ["--audit-contract", "missing-contract"])
+            for flags in cases:
+                with self.subTest(flags=flags), patch("sys.argv", ["mantis_v4_live.py", "--forward-dir", relative, *flags]), redirect_stdout(StringIO()):
+                    self.assertEqual(live.main(), 0)
 
 
 if __name__ == "__main__": unittest.main()

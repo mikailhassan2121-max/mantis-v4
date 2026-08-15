@@ -14,7 +14,7 @@ and is wrapped at every boundary, so a render, tone or speech failure degrades
 the interface and never the scan loop.
 """
 from __future__ import annotations
-import argparse,math,time,uuid
+import argparse,json,math,time,uuid
 from datetime import datetime,timezone
 from pathlib import Path
 import numpy as np
@@ -27,7 +27,9 @@ from mantis_v4.simulation import (combine_channels,compute_fragility,conservativ
  digital_sensitivities,gaussian_terminal,scaled_sensitivities,student_t_terminal)
 from mantis_v4.economics import (EconomicsProviderChain,ManualEconomicsProvider,
  ProxyEconomicsProvider,WebullEconomicsProvider)
-from mantis_v4.forward import ForwardConfig,ForwardEngine,ForwardStore,LiveAssetState,ReferenceStatus
+from mantis_v4.forward import (ForwardConfig,ForwardEngine,ForwardStore,LiveAssetState,
+ ReferenceStatus,audit_contract,daily_report,forward_report,incorrect_signals,manifest,
+ render_manifest,render_report)
 from mantis_v4.forward.console import render_snapshot
 from mantis_v4.forward.events import AppEvent,EventBus,EventType
 UTC=timezone.utc
@@ -221,9 +223,6 @@ def main():
  from mantis_v4.ui import errors as ui_errors, startup as ui_startup
  ui_config=PresentationConfig.load().apply_cli(args)
  if args.forward_report or args.daily_report or args.forward_manifest or args.audit_contract or args.incorrect_report:
-  import json
-  from mantis_v4.forward import (ForwardStore,audit_contract,daily_report,forward_report,
-   incorrect_signals,manifest,render_manifest,render_report)
   report_store=ForwardStore(root/args.forward_dir)
   if args.forward_report: print(render_report(forward_report(report_store)))
   elif args.daily_report:
