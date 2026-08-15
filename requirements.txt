@@ -4,6 +4,7 @@
 # installs. Every entry below is justified; nothing speculative is included.
 #
 # Install:  python -m pip install -r requirements.txt
+# Supported production runtime: Python 3.11+ (64-bit recommended on Windows).
 
 # --- required by Phase 2 (contract semantics, providers, quality, recording) --
 numpy>=1.26            # vectorised bar/volatility arithmetic

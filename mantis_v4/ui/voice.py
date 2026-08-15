@@ -136,6 +136,10 @@ class VoiceEngine:
         while time.monotonic() < end and not self._queue.empty():
             time.sleep(0.01)
 
+    @property
+    def is_alive(self) -> bool:
+        return self._thread.is_alive()
+
     # -- worker -------------------------------------------------------------
 
     def _run(self) -> None:
@@ -176,6 +180,10 @@ class NullVoiceEngine:
 
     def drain(self, timeout: float = 0.0) -> None:
         return None
+
+    @property
+    def is_alive(self) -> bool:
+        return False
 
 
 def build_voice(config, speaker=None):

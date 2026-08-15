@@ -45,6 +45,7 @@ CONTENT_TYPES = {
 
 # A slow client is dropped rather than allowed to accumulate frames forever.
 MAX_CLIENT_BACKLOG = 8
+MAX_SSE_CLIENTS = 16
 
 
 class _Client:
@@ -79,6 +80,9 @@ class CommandCenterServer:
         self.state = state
         self.config = config
         self.host = host if host is not None else getattr(config, "web_host", "127.0.0.1")
+        if self.host not in {"127.0.0.1", "localhost"}:
+            raise ValueError("web server must bind to localhost only")
+        self.host = "127.0.0.1"
         self.requested_port = port if port is not None else int(getattr(config, "web_port", 0))
         self.web_root = Path(web_root) if web_root else WEB_ROOT
         self._clients: set[_Client] = set()
@@ -144,6 +148,8 @@ class CommandCenterServer:
     def register(self) -> _Client:
         client = _Client()
         with self._clients_lock:
+            if len(self._clients) >= MAX_SSE_CLIENTS:
+                raise ConnectionError("maximum SSE clients reached")
             self._clients.add(client)
         return client
 

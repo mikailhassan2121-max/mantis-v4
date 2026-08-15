@@ -24,7 +24,7 @@ from rich.theme import Theme
 PRODUCT_NAME = "MANTIS"
 PRODUCT_EXPANSION = "Market Analysis and Neuro-Tactical Intraday Signal System"
 PRODUCT_SHORT = "M A N T I S"
-SOFTWARE_VERSION = "MANTIS V4 / PHASE 9 COMMAND CENTER"
+SOFTWARE_VERSION = "MANTIS 4.10.0 / PHASE 10 HARDENED"
 ADVISORY_BANNER = "OBSERVATION ONLY — NO AUTOMATED EXECUTION"
 
 # The operating environment owns the boot identity; MANTIS is the subsystem that

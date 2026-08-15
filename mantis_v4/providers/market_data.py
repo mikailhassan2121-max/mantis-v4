@@ -32,6 +32,7 @@ unbounded-hang risk is not.
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+import time
 from typing import Optional
 
 import numpy as np
@@ -196,7 +197,9 @@ class YFinanceMarketDataProvider(MarketDataProvider):
         timeout_seconds: float = 8.0,
         max_retries: int = 3,
         backoff_seconds: float = 1.5,
+        cooldown_seconds: float = 30.0,
         downloader=None,
+        monotonic=None,
     ) -> None:
         super().__init__()
         self.interval = interval
@@ -207,7 +210,10 @@ class YFinanceMarketDataProvider(MarketDataProvider):
         self.timeout_seconds = timeout_seconds
         self.max_retries = max_retries
         self.backoff_seconds = backoff_seconds
+        self.cooldown_seconds = max(0.0, float(cooldown_seconds))
         self._cache: dict[str, pd.DataFrame] = {}
+        self._cooldown_until: dict[str, float] = {}
+        self._monotonic = monotonic or time.monotonic
         self._downloader = downloader or self._default_downloader
 
     # -- network ------------------------------------------------------------
@@ -257,21 +263,28 @@ class YFinanceMarketDataProvider(MarketDataProvider):
         degraded = False
         error_text = ""
 
-        try:
-            fresh = retry_with_backoff(
-                lambda: self._fetch(asset, period),
-                attempts=self.max_retries,
-                backoff_seconds=self.backoff_seconds,
-                health=self.health,
-            )
-        except ProviderError as exc:
-            error_text = str(exc)
+        cooling = self._monotonic() < self._cooldown_until.get(asset, 0.0)
+        if cooling:
+            error_text = "provider cooldown active"
             degraded = True
+        else:
+            try:
+                fresh = retry_with_backoff(
+                    lambda: self._fetch(asset, period),
+                    attempts=self.max_retries,
+                    backoff_seconds=self.backoff_seconds,
+                    health=self.health,
+                )
+                self._cooldown_until.pop(asset, None)
+            except ProviderError as exc:
+                error_text = str(exc)
+                degraded = True
+                self._cooldown_until[asset] = self._monotonic() + self.cooldown_seconds
 
         # Fallback: re-issue with the longer bootstrap period when the refresh
         # came back too short. Uses yf.download (which supports timeout) rather
         # than Ticker.history (which does not).
-        if (fresh is None or len(fresh) < self.min_candles) and period != self.bootstrap_period:
+        if not cooling and (fresh is None or len(fresh) < self.min_candles) and period != self.bootstrap_period:
             try:
                 fallback = retry_with_backoff(
                     lambda: self._fetch(asset, self.bootstrap_period),

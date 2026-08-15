@@ -46,5 +46,7 @@
   "voice_min_interval_seconds": 30.0,
 
   "diagnostic_log": "data/logs/mantis_ui_diagnostics.log",
+  "diagnostic_log_max_bytes": 2000000,
+  "diagnostic_log_backups": 3,
   "developer_mode": false
 }

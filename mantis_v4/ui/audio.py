@@ -125,6 +125,10 @@ class AudioEngine:
         while time.monotonic() < end and not self._queue.empty():
             time.sleep(0.01)
 
+    @property
+    def is_alive(self) -> bool:
+        return self._thread.is_alive()
+
     # -- worker -------------------------------------------------------------
 
     def _scaled(self, tones: Sequence[Tone]) -> list[Tone]:
@@ -175,6 +179,10 @@ class NullAudioEngine:
 
     def drain(self, timeout: float = 0.0) -> None:
         return None
+
+    @property
+    def is_alive(self) -> bool:
+        return False
 
 
 def build_audio(config, backend=None):

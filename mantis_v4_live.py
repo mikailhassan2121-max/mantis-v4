@@ -33,6 +33,12 @@ from mantis_v4.forward.events import AppEvent,EventBus,EventType
 UTC=timezone.utc
 PHASE6_FRAGILITY_SCALES={"gamma":7.537633538712959,"vega":0.013047089075600496,"theta":0.004530053560656391,"vol_of_vol":0.3016632827895451}
 
+def _scoped_path(root,value,label):
+ target=(Path(root)/value).resolve()
+ try: target.relative_to(Path(root).resolve())
+ except ValueError as exc: raise ValueError(f"{label} must stay inside the project directory") from exc
+ return target
+
 # ---------------------------------------------------------------------------
 # Quantitative core. Unchanged from Phase 8; extracted only so the runner's
 # presentation wiring cannot be confused with its mathematics.
@@ -71,9 +77,12 @@ def build_parser():
  ui.add_argument("--no-startup",action="store_true",help="skip the initialization sequence")
  ui.add_argument("--diagnostics",action="store_true",help="show the advanced diagnostics panel")
  ui.add_argument("--focus",default=None,metavar="ASSET",help="asset shown in the primary decision area by default")
+ ui.add_argument("--profile",choices=["default","quiet","diagnostic"],default="default",help="small presentation/runtime profile")
  modes=ap.add_argument_group("safe modes (never write forward records)")
  modes.add_argument("--test-alerts",action="store_true",help="preview every alert tone and announcement, then exit")
  modes.add_argument("--demo",action="store_true",help="run the interface on synthetic states, clearly labelled")
+ modes.add_argument("--health-check",action="store_true",help="inspect installation and configuration without starting the scanner")
+ modes.add_argument("--self-test",action="store_true",help="run isolated persistence/web checks without touching forward data")
  return ap
 
 # ---------------------------------------------------------------------------
@@ -93,13 +102,17 @@ def _start_web(state,ui_config,root):
   print(f"WEB INTERFACE DISABLED: {type(exc).__name__}: {exc}")
   return None
  print(f"MANTIS COMMAND CENTER  {server.url}")
+ state.set_status(http_server_status="LIVE")
  if ui_config.web_open_browser:
   profile=root/"data"/"ui-profile"
   process=webshell.launch(server.url,profile_dir=profile,fullscreen=ui_config.web_fullscreen)
+  server.browser_process=process
+  state.set_status(browser_shell_status="LIVE" if process is not None else "UNAVAILABLE")
   if process is None:
    print("No Chromium-family browser found (Edge/Chrome/Brave).")
    print(f"Open this address manually: {server.url}")
  else:
+  state.set_status(browser_shell_status="SUPPRESSED")
   print("Browser launch suppressed (--no-browser). Open the address above.")
  return server
 
@@ -163,11 +176,17 @@ def run_demo(ui_config,cfg,args):
    time.sleep(cfg.scan_interval_seconds)
  except KeyboardInterrupt: pass
  finally:
+  from mantis_v4.runtime import shutdown_lines,stop_browser
+  browser=getattr(server,"browser_process",None) if server is not None else None
   if center is not None:
    if args.once: center.render_once()
    center.stop()
   if server is not None: server.stop()
   audio.stop(); voice.stop()
+  browser_stopped=stop_browser(browser) if browser is not None else None
+  for line in shutdown_lines(forward_safe=True,server=None if server is None else True,
+   reporter=None,audio=not getattr(audio,"is_alive",False),
+   voice=not getattr(voice,"is_alive",False),browser=browser_stopped): print(line)
  return 0
 
 # ---------------------------------------------------------------------------
@@ -176,19 +195,41 @@ def run_demo(ui_config,cfg,args):
 
 def main():
  args=build_parser().parse_args(); root=Path(__file__).resolve().parent
+ forward_path=_scoped_path(root,args.forward_dir,"forward directory")
+ manual_path=_scoped_path(root,args.manual_economics,"manual economics path")
+ args.forward_dir=str(forward_path.relative_to(root))
+ args.manual_economics=str(manual_path.relative_to(root))
  from mantis_v4.ui import (AlertRouter,CommandCenter,CommandCenterState,PresentationConfig,
   Severity,build_audio,build_console,build_voice)
  from mantis_v4.ui import errors as ui_errors, startup as ui_startup
  ui_config=PresentationConfig.load().apply_cli(args)
+ if args.health_check:
+  from mantis_v4.health import exit_code,inspect,render
+  results=inspect(root,Path(args.forward_dir)); print(render(results)); return exit_code(results)
+ if args.self_test:
+  from mantis_v4.health import exit_code,render,self_test
+  results=self_test(root); print(render(results,"MANTIS SELF-TEST")); return exit_code(results)
  if args.test_alerts: return run_test_alerts(ui_config)
  cfg=MantisConfig.load()
  if not cfg.voice_enabled: ui_config.voice_enabled=False
  if args.demo: return run_demo(ui_config,cfg,args)
 
+ from mantis_v4.health import exit_code as health_exit,inspect as health_inspect
+ preflight=health_inspect(root,Path(args.forward_dir))
+ if health_exit(preflight):
+  failed=[r for r in preflight if r.critical and not r.ok]
+  raise RuntimeError("pre-flight failed: "+"; ".join(f"{r.component}: {r.detail}" for r in failed))
+ print("MANTIS PREFLIGHT")
+ print("QUANT CORE ............. READY")
+ print("FORWARD STORE .......... READY")
+ print("LOCAL SERVER ........... READY")
+ auth=next((r.status for r in preflight if r.component=="WEBULL AUTH"),"NOT CONFIGURED")
+ print(f"WEBULL ................. {auth}")
+
  clock=Clock(); tz=load_timezone(cfg.contract_timezone)
  store=ForwardStore(root/args.forward_dir); bus=EventBus()
  engine=ForwardEngine(store,ForwardConfig(cfg.scan_interval_seconds,cfg.max_data_age_seconds,cfg.contract_timezone),events=bus,repo=root)
- market=YFinanceMarketDataProvider(interval=cfg.bar_interval,bootstrap_period=cfg.bootstrap_period,refresh_period=cfg.refresh_period,min_candles=cfg.min_candles,max_cache_rows=cfg.max_cache_rows,timeout_seconds=cfg.network_timeout_seconds,max_retries=cfg.max_retries,backoff_seconds=cfg.retry_backoff_seconds)
+ market=YFinanceMarketDataProvider(interval=cfg.bar_interval,bootstrap_period=cfg.bootstrap_period,refresh_period=cfg.refresh_period,min_candles=cfg.min_candles,max_cache_rows=cfg.max_cache_rows,timeout_seconds=cfg.network_timeout_seconds,max_retries=cfg.max_retries,backoff_seconds=cfg.retry_backoff_seconds,cooldown_seconds=cfg.provider_cooldown_seconds)
  webull=WebullEconomicsProvider(cfg.credentials); manual=ManualEconomicsProvider(root/args.manual_economics)
  economics=EconomicsProviderChain([webull,manual,ProxyEconomicsProvider()])
  # Rebuild crossing state from immutable observations after restart.
@@ -234,19 +275,23 @@ def main():
   print("WEBULL_STATUS = "+webull.status)
 
  reporter=_start_forward_reporter(store,state,ui_config)
+ state.set_status(forward_logger_status="LIVE" if reporter is not None else "DISABLED")
  state.log(Severity.INFO.value,"SYSTEM","MANTIS ONLINE",f"run {engine.run_id[:8]}")
 
  def report_error(exc,*,component,provider="n/a",recovery="retrying / degraded mode"):
   """One place converts an exception into an ON_ERROR hook plus a log entry."""
   error=ui_errors.describe(exc,provider=provider,component=component,recovery=recovery)
-  ui_errors.write_diagnostic(error,ui_config.diagnostic_log_path())
+  ui_errors.write_diagnostic(error,ui_config.diagnostic_log_path(),
+   max_bytes=ui_config.diagnostic_log_max_bytes,backups=ui_config.diagnostic_log_backups)
   state.set_error(error)
   try: bus.emit(AppEvent(EventType.ERROR,error.timestamp.isoformat(),
    {"component":component,"provider":provider,"message":error.message,"recovery":recovery}))
   except Exception: pass
 
+ persistence_safe=True
  try:
   while True:
+   persistence_failed=False
    instant=clock.capture(); window=ContractWindow.for_instant(instant,tz,cfg.contract_window_minutes)
    for asset in cfg.active_assets:
     try:
@@ -271,22 +316,38 @@ def main():
      # One asset's failure never ends the scan or the run.
      report_error(exc,component=f"scan {asset}",provider="yahoo")
      _hold(state,bus,asset,instant,"UNDERLYING_DATA_UNAVAILABLE")
-   store.append("provider_health",{"health_id":str(uuid.uuid4()),"timestamp_utc":instant.utc.isoformat(),"provider":"yahoo","state":market.health.state.value,"detail":market.health.detail,"successful_fetches":market.health.total_requests-market.health.total_failures,"failed_fetches":market.health.total_failures},"health_id")
+     if isinstance(exc,OSError):
+      persistence_failed=True; persistence_safe=False; break
+   if persistence_failed: break
+   try:
+    store.append("provider_health",{"health_id":str(uuid.uuid4()),"timestamp_utc":instant.utc.isoformat(),"provider":"yahoo","state":market.health.state.value,"detail":market.health.detail,"successful_fetches":market.health.total_requests-market.health.total_failures,"failed_fetches":market.health.total_failures},"health_id")
+   except OSError as exc:
+    persistence_safe=False
+    report_error(exc,component="forward logger",provider="filesystem",
+     recovery="DATA HOLD — persistence unavailable; scanner stopping safely")
+    for asset in cfg.active_assets: _hold(state,bus,asset,instant,"PERSISTENCE_UNAVAILABLE")
+    break
    _sync_health(state,router,market,instant)
    if args.once: break
    elapsed=clock.monotonic()-instant.monotonic; clock.sleep(max(0,cfg.scan_interval_seconds-elapsed))
  except KeyboardInterrupt:
   state.log(Severity.NOTICE.value,"SYSTEM","SHUTDOWN REQUESTED","forward records intact")
  finally:
-  if reporter is not None: reporter.set()
+  from mantis_v4.runtime import shutdown_lines,stop_browser
+  reporter_stopped=reporter.stop() if reporter is not None else None
+  browser=getattr(server,"browser_process",None) if server is not None else None
   if center is not None:
    if args.once: center.render_once()
    center.stop()
   if server is not None: server.stop()
   audio.stop(); voice.stop()
+  browser_stopped=stop_browser(browser) if browser is not None else None
   if center is not None and center.disabled_reason:
    print(f"INTERFACE DISABLED: {center.disabled_reason}")
-  print("MANTIS STOPPED | forward records are append-only and intact")
+  for line in shutdown_lines(forward_safe=persistence_safe,
+   server=None if server is None else True,reporter=reporter_stopped,
+   audio=not getattr(audio,"is_alive",False),voice=not getattr(voice,"is_alive",False),
+   browser=browser_stopped): print(line)
  return 0
 
 # ---------------------------------------------------------------------------
@@ -327,18 +388,26 @@ def _sync_health(state,router,market,instant):
 def _start_forward_reporter(store,state,ui_config):
  """Recompute the forward-validation summary off the scan thread."""
  if not ui_config.show_forward_validation: return None
- import threading
+ from mantis_v4.runtime import start_worker
  from mantis_v4.forward import compare_historical,forward_report
- stop=threading.Event()
- def worker():
+ def worker(stop):
   while not stop.is_set():
    try:
     report=forward_report(store,n_boot=200)
     state.set_forward(report,compare_historical(report,store.read("observations")))
-   except Exception:
-    pass
+    state.set_status(forward_logger_status="LIVE")
+   except Exception as exc:
+    state.set_status(forward_logger_status="DEGRADED")
+    state.log("WARNING","FORWARD","REPORTER DEGRADED",f"{type(exc).__name__}: {exc}")
    stop.wait(max(15.0,ui_config.forward_report_interval_seconds))
- threading.Thread(target=worker,name="MANTIS-Forward",daemon=True).start()
- return stop
+ return start_worker("MANTIS-Forward",worker,daemon=True)
 
-if __name__=="__main__": raise SystemExit(main())
+def cli():
+ try: return main()
+ except (ValueError,RuntimeError,OSError) as exc:
+  print("MANTIS STARTUP FAILED")
+  print(f"{type(exc).__name__}: {exc}")
+  print("Run: python mantis_v4_live.py --health-check")
+  return 2
+
+if __name__=="__main__": raise SystemExit(cli())

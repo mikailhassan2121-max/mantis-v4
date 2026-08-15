@@ -98,6 +98,8 @@ class PresentationConfig:
 
     # -- diagnostics --------------------------------------------------------
     diagnostic_log: str = "data/logs/mantis_ui_diagnostics.log"
+    diagnostic_log_max_bytes: int = 2_000_000
+    diagnostic_log_backups: int = 3
     developer_mode: bool = False            # show raw tracebacks in-band
 
     # -- modes (set by CLI, never persisted as "real") ----------------------
@@ -208,10 +210,33 @@ class PresentationConfig:
             raise ValueError("boot_duration must be between 0 and 30 seconds")
         if not 0.0 <= self.startup_alert_suppression_seconds <= 60.0:
             raise ValueError("startup_alert_suppression_seconds must be between 0 and 60 seconds")
+        if self.diagnostic_log_max_bytes < 16_384:
+            raise ValueError("diagnostic_log_max_bytes must be >= 16384")
+        if not 1 <= self.diagnostic_log_backups <= 10:
+            raise ValueError("diagnostic_log_backups must be between 1 and 10")
+        diagnostic = Path(self.diagnostic_log)
+        if not diagnostic.is_absolute() and ".." in diagnostic.parts:
+            raise ValueError("diagnostic_log must not escape the project directory")
         return self
+
+    def apply_profile(self, profile: Optional[str]) -> "PresentationConfig":
+        """Apply one small operator profile; no quantitative setting is present."""
+        name = (profile or "default").lower()
+        if name == "default":
+            return self
+        if name == "quiet":
+            self.audio_enabled = False
+            self.voice_enabled = False
+        elif name == "diagnostic":
+            self.show_advanced_diagnostics = True
+            self.developer_mode = True
+        else:
+            raise ValueError(f"unknown presentation profile {profile!r}")
+        return self.validate()
 
     def apply_cli(self, args: Any) -> "PresentationConfig":
         """Apply argparse flags. CLI always wins over file and environment."""
+        self.apply_profile(getattr(args, "profile", None))
         if getattr(args, "no_ui", False):
             self.ui_enabled = False
         if getattr(args, "no_audio", False):

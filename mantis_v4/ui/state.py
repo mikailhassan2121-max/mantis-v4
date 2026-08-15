@@ -269,6 +269,9 @@ class SystemStatus:
     next_scan_utc: Optional[datetime] = None
     audio_enabled: bool = False
     voice_enabled: bool = False
+    forward_logger_status: str = "READY"
+    http_server_status: str = "NOT STARTED"
+    browser_shell_status: str = "NOT STARTED"
     demo_mode: bool = False
     observation_only: bool = True
 

@@ -443,6 +443,10 @@
             { k: "ECONOMICS", html: dot(s.economics_status) },
             { k: "REFERENCE", html: dot(s.reference_status) },
             { k: "QUOTE", html: dot(s.quote_status) },
+            { k: "FORWARD LOG", html: dot(s.forward_logger_status) },
+            { k: "HTTP / SSE", v: (s.http_server_status || "—") + " / " +
+                F.val((s.host || {}).clients, "0") },
+            { k: "BROWSER", html: dot(s.browser_shell_status) },
             null,
             { k: "AUDIO / VOICE", v: (s.audio_enabled ? "ON" : "OFF") + "  /  " + (s.voice_enabled ? "ON" : "OFF") }
         ]);

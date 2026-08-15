@@ -43,11 +43,26 @@ def describe(
     )
 
 
-def write_diagnostic(error: SystemError, path: Path) -> Optional[Path]:
+def _rotate(path: Path, max_bytes: int, backups: int) -> None:
+    if not path.exists() or path.stat().st_size < max_bytes:
+        return
+    oldest = path.with_name(path.name + f".{backups}")
+    if oldest.exists():
+        oldest.unlink()
+    for index in range(backups - 1, 0, -1):
+        source = path.with_name(path.name + f".{index}")
+        if source.exists():
+            source.replace(path.with_name(path.name + f".{index + 1}"))
+    path.replace(path.with_name(path.name + ".1"))
+
+
+def write_diagnostic(error: SystemError, path: Path, *, max_bytes: int = 2_000_000,
+                     backups: int = 3) -> Optional[Path]:
     """Append the full traceback. Never raises: logging a failure must not fail."""
     try:
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
+        _rotate(path, max_bytes, backups)
         block = (
             f"\n===== {error.timestamp.isoformat()} =====\n"
             f"provider={error.provider} component={error.component}\n"

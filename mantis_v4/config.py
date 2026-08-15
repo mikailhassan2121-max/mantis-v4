@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any, Optional
@@ -50,7 +51,12 @@ def _as_bool(value: Any) -> bool:
         return value
     if value is None:
         return False
-    return str(value).strip().lower() in {"1", "true", "yes", "on", "enabled"}
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on", "enabled"}:
+        return True
+    if text in {"", "0", "false", "no", "off", "disabled"}:
+        return False
+    return False  # fail-safe: an unknown value never enables Webull market data
 
 
 @dataclass
@@ -110,6 +116,7 @@ class MantisConfig:
     network_timeout_seconds: float = 8.0
     max_retries: int = 3
     retry_backoff_seconds: float = 1.5
+    provider_cooldown_seconds: float = 30.0
 
     # -- market data --------------------------------------------------------
     bar_interval: str = "1m"
@@ -284,6 +291,39 @@ class MantisConfig:
 
     def validate(self) -> None:
         """Reject impossible configurations at startup, not at 3am mid-trade."""
+        numeric = {
+            "contract_window_minutes": self.contract_window_minutes,
+            "scan_interval_seconds": self.scan_interval_seconds,
+            "network_timeout_seconds": self.network_timeout_seconds,
+            "max_retries": self.max_retries,
+            "retry_backoff_seconds": self.retry_backoff_seconds,
+            "provider_cooldown_seconds": self.provider_cooldown_seconds,
+            "min_candles": self.min_candles,
+            "max_cache_rows": self.max_cache_rows,
+            "max_data_age_seconds": self.max_data_age_seconds,
+            "max_quote_age_seconds": self.max_quote_age_seconds,
+        }
+        for name, value in numeric.items():
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError(f"{name} must be numeric")
+        if not isinstance(self.assets, list) or not all(isinstance(x, str) for x in self.assets):
+            raise ValueError("assets must be a list of symbols")
+        if len(set(self.assets)) != len(self.assets):
+            raise ValueError("assets must not contain duplicates")
+        invalid_assets = [asset for asset in self.assets if not re.fullmatch(r"[A-Z0-9]{2,12}-USD", asset)]
+        if invalid_assets:
+            raise ValueError(f"invalid asset symbols: {invalid_assets}")
+        if self.enabled_assets is not None:
+            if not isinstance(self.enabled_assets, list) or not all(isinstance(x, str) for x in self.enabled_assets):
+                raise ValueError("enabled_assets must be null or a list of symbols")
+            unknown = sorted(set(self.enabled_assets) - set(self.assets))
+            if unknown:
+                raise ValueError(f"enabled_assets contains unknown symbols: {unknown}")
+        try:
+            from zoneinfo import ZoneInfo
+            ZoneInfo(self.contract_timezone)
+        except Exception as exc:
+            raise ValueError(f"invalid contract_timezone {self.contract_timezone!r}") from exc
         if self.contract_window_minutes <= 0:
             raise ValueError("contract_window_minutes must be positive")
         if 60 % self.contract_window_minutes != 0:
@@ -295,12 +335,26 @@ class MantisConfig:
             raise ValueError("No active assets configured")
         if self.scan_interval_seconds <= 0:
             raise ValueError("scan_interval_seconds must be positive")
+        if self.network_timeout_seconds <= 0 or self.network_timeout_seconds > 120:
+            raise ValueError("network_timeout_seconds must be in (0, 120]")
+        if not 1 <= self.max_retries <= 10:
+            raise ValueError("max_retries must be between 1 and 10")
+        if self.retry_backoff_seconds < 0 or self.retry_backoff_seconds > 60:
+            raise ValueError("retry_backoff_seconds must be between 0 and 60")
+        if self.provider_cooldown_seconds < 0 or self.provider_cooldown_seconds > 600:
+            raise ValueError("provider_cooldown_seconds must be between 0 and 600")
+        if self.min_candles < 2 or self.max_cache_rows < self.min_candles:
+            raise ValueError("cache settings require 2 <= min_candles <= max_cache_rows")
         if self.max_data_age_seconds <= 0:
             raise ValueError("max_data_age_seconds must be positive")
         if not (0.0 < self.min_model_confidence < 1.0):
             raise ValueError("min_model_confidence must be strictly between 0 and 1")
         if self.record_every_n_scans < 1:
             raise ValueError("record_every_n_scans must be >= 1")
+        for name in ("data_dir", "local_contract_dir"):
+            value = Path(getattr(self, name))
+            if value.is_absolute() or ".." in value.parts:
+                raise ValueError(f"{name} must stay inside the project directory")
 
 
 def credential_status_lines(config: MantisConfig) -> list[str]:

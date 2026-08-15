@@ -20,7 +20,7 @@ PHASE STATUS
 Phase 2 contains NO probability model. Every decision it produces is NO TRADE.
 """
 
-__version__ = "4.0.0-phase2"
+__version__ = "4.10.0"
 
 from .clock import Clock, FrozenClock, Instant, LoopPacer
 from .config import MantisConfig, WebullCredentials

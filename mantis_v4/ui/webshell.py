@@ -16,6 +16,8 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
+from urllib.parse import urlparse
 from pathlib import Path
 from typing import Optional
 
@@ -40,6 +42,18 @@ MAC_CANDIDATES = (
     "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
     "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
 )
+
+_LAUNCH_LOCK = threading.Lock()
+_ACTIVE_PROCESS: Optional[subprocess.Popen] = None
+
+
+def _valid_local_url(url: str) -> bool:
+    try:
+        parsed = urlparse(url)
+        return (parsed.scheme == "http" and parsed.hostname in {"127.0.0.1", "localhost"}
+                and parsed.port is not None and not parsed.username and not parsed.password)
+    except ValueError:
+        return False
 
 
 def find_browser() -> Optional[str]:
@@ -69,6 +83,12 @@ def launch(url: str, profile_dir: Optional[Path] = None, fullscreen: bool = True
     operator's normal browsing session and stops a "restore pages?" prompt from
     ever appearing over the interface.
     """
+    global _ACTIVE_PROCESS
+    if not _valid_local_url(url):
+        return None
+    with _LAUNCH_LOCK:
+        if _ACTIVE_PROCESS is not None and _ACTIVE_PROCESS.poll() is None:
+            return _ACTIVE_PROCESS
     executable = browser or find_browser()
     if executable is None:
         return None
@@ -93,8 +113,11 @@ def launch(url: str, profile_dir: Optional[Path] = None, fullscreen: bool = True
     if sys.platform == "win32":
         creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     try:
-        return subprocess.Popen(arguments, stdout=subprocess.DEVNULL,
-                                stderr=subprocess.DEVNULL,
-                                creationflags=creation_flags)
+        process = subprocess.Popen(arguments, stdout=subprocess.DEVNULL,
+                                   stderr=subprocess.DEVNULL,
+                                   creationflags=creation_flags)
+        with _LAUNCH_LOCK:
+            _ACTIVE_PROCESS = process
+        return process
     except OSError:
         return None
