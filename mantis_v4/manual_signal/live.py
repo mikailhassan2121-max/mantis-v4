@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import gc
 import json
 import subprocess
 import uuid
@@ -18,7 +19,9 @@ from mantis_v4.kalshi_forward.live import (compute_shadow_snapshot,
 from mantis_v4.providers.market_data import YFinanceMarketDataProvider
 
 from .core import (ACTIONABILITY, ASSETS, POLICY_VERSION, FeeMetadataVerifier,
-    ManualSignalStore, evaluate_candidate, select_primary_signal)
+    ManualSignalStore, apply_signal_lock, evaluate_candidate, select_primary_signal)
+
+RECENT_SHADOW_ROWS = 4096
 
 
 def _placeholder(asset, status, reason, seconds_remaining):
@@ -53,8 +56,10 @@ class ManualSignalEngine:
             timeout_seconds=config.network_timeout_seconds,max_retries=config.max_retries,
             backoff_seconds=config.retry_backoff_seconds,cooldown_seconds=config.provider_cooldown_seconds)
         self.fees=FeeMetadataVerifier(self.provider.client); self.bounds=load_empirical_bounds(root)
-        self.shadow=ShadowStore(shadow_dir); self.signals=ManualSignalStore(signal_dir)
+        self.shadow=ShadowStore(shadow_dir,recent_id_limit=RECENT_SHADOW_ROWS); self.signals=ManualSignalStore(signal_dir)
         self.crossings={}; self.last_side={}
+        self.locked_signal=None; self.lock_window_end=None
+        self.memory_status="NORMAL"
         try:self.git_commit=subprocess.check_output(["git","rev-parse","HEAD"],cwd=root,text=True,stderr=subprocess.DEVNULL).strip()
         except Exception:self.git_commit="UNKNOWN"
         self.shadow.append("runs",_shadow_run(self.run_id,"START",datetime.now(UTC),self.git_commit))
@@ -63,7 +68,14 @@ class ManualSignalEngine:
         self.shadow.append("runs",_shadow_run(self.run_id,"STOP",datetime.now(UTC),self.git_commit))
 
     def scan(self, instant, window, *, persist_signal=True):
-        resolve_available(self.shadow,self.provider,self.run_id,instant.utc)
+        resolve_available(self.shadow,self.provider,self.run_id,instant.utc,recent_limit=RECENT_SHADOW_ROWS)
+        window_end=window.end_utc.isoformat()
+        if self.lock_window_end != window_end:
+            self.lock_window_end=window_end
+            self.locked_signal=self.signals.locked_for_window(window_end)
+            current_keys={(window.contract_id,asset) for asset in ASSETS}
+            self.crossings={key:value for key,value in self.crossings.items() if key in current_keys}
+            self.last_side={key:value for key,value in self.last_side.items() if key in current_keys}
         candidates=[]; ui=[]
         for asset in ASSETS:
             result=self.provider.get_quote(asset,window.start_utc,window.end_utc,instant.utc)
@@ -88,8 +100,17 @@ class ManualSignalEngine:
             except Exception as exc:
                 candidates.append(_placeholder(asset,"NO SIGNAL",type(exc).__name__,window.seconds_remaining(instant)))
         selection=select_primary_signal(candidates)
+        selection,self.locked_signal=apply_signal_lock(selection,self.locked_signal,instant.utc)
+        from mantis_v4.ui.hostmetrics import host_payload
+        memory=host_payload(); self.memory_status=memory.get("memory_status","NORMAL")
+        selection["operator_state"]["memory_status"]=self.memory_status
+        selection["operator_state"]["buffer_counts"]={"crossings":len(self.crossings),
+            "last_side":len(self.last_side),"fee_metadata":len(self.fees._cache),
+            "market_mappings":len(self.provider._mapping_cache)}
+        if self.memory_status in {"WARNING","CRITICAL"}:
+            self.provider.invalidate(); gc.collect()
         persisted=False
-        if selection["selected"] and persist_signal:
+        if selection["selected"] and persist_signal and selection["selected"].get("issued_at_utc")==instant.utc.isoformat():
             persisted=self.signals.append(selection["selected"],instant.utc)
         return ui,selection,persisted
 
@@ -104,7 +125,7 @@ class ManualSignalEngine:
             p_yes=snap.p_yes,p_no=snap.p_no,predicted_side=snap.predicted_side,
             conservative_bound=snap.conservative_bound,fragility=snap.fragility,
             disagreement=snap.disagreement,crossing_probability=snap.crossing_probability,
-            reference_crossings=snap.reference_crossings,phase6_state="QUALIFIED" if candidate["status"] not in {"CONF FAIL","WAIT T-300"} else "WAIT",
+            reference_crossings=snap.reference_crossings,phase6_state="QUALIFIED" if candidate["status"]!="CONF FAIL" else "WAIT",
             phase6_reason=candidate["reason"],final_decision="WAIT",final_reason=candidate["status"],
             data_age_seconds=0,fetch_latency_seconds=0,next_scan_utc=now,
             yes_bid=float(quote.yes_bid) if quote and quote.yes_bid is not None else None,

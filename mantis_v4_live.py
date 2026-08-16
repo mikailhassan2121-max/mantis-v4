@@ -489,7 +489,7 @@ def _run_kalshi_manual_signals(root,args,cfg,ui_config,diagnostic=False):
  signal_path=_scoped_path(root,args.kalshi_manual_signal_dir,"Kalshi manual signal directory")
  state=CommandCenterState(cfg.active_assets,ui_config)
  state.set_status(run_id="EXPERIMENTAL",software_version="MANTIS 4.x",
-  model_version="KALSHI_REFERENCE_V1",policy_name="EXPERIMENTAL_MANUAL_SIGNAL_V1",
+  model_version="KALSHI_REFERENCE_V1",policy_name="EXPERIMENTAL_MANUAL_SIGNAL_V2",
   underlying_provider="YAHOO_PROXY",underlying_state="STARTING",webull_status="NOT USED",
   economics_provider="KALSHI_PUBLIC_REST",economics_status="EXPERIMENTAL",
   audio_enabled=ui_config.audio_enabled,voice_enabled=ui_config.voice_enabled,
@@ -500,6 +500,7 @@ def _run_kalshi_manual_signals(root,args,cfg,ui_config,diagnostic=False):
  audio=build_audio(ui_config); voice=build_voice(ui_config)
  clock=Clock(); tz=load_timezone(cfg.contract_timezone); server=None; center=None
  ready=False; pending=None
+ last_memory_status="NORMAL"
  if not diagnostic and ui_config.ui_enabled and ui_config.ui_mode=="web" and not args.once:
   def armed():
    nonlocal ready
@@ -513,6 +514,11 @@ def _run_kalshi_manual_signals(root,args,cfg,ui_config,diagnostic=False):
   while True:
    instant=clock.capture(); window=ContractWindow.for_instant(instant,tz)
    snapshots,selection,persisted=engine.scan(instant,window,persist_signal=not diagnostic)
+   if engine.memory_status!=last_memory_status:
+    state.log("WARNING" if engine.memory_status!="NORMAL" else "NOTICE","MEMORY",
+     "MEMORY PRESSURE" if engine.memory_status!="NORMAL" else "MEMORY NORMAL",
+     engine.memory_status)
+    last_memory_status=engine.memory_status
    for snapshot in snapshots: state.update_from_snapshot(snapshot)
    state.set_primary_selection(selection,persisted=persisted)
    if args.operator_diagnostics and not diagnostic:

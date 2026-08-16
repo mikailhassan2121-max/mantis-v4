@@ -167,6 +167,14 @@ class CommandCenterServer:
         payload["frontend_build_id"] = self.frontend_build_id
         payload["presentation"]["frontend_build_id"] = self.frontend_build_id
         payload["presentation"]["ready_token"] = self._presentation_token
+        with self._clients_lock:
+            payload["status"]["host"]["active_sse_clients"] = len(self._clients)
+            payload["status"]["host"]["buffer_counts"] = {
+                "sse_queued_frames": sum(len(client.frames) for client in self._clients),
+                "sse_queue_cap_per_client": MAX_CLIENT_BACKLOG,
+                "event_log_cap": int(getattr(self.config,"event_log_length",200)),
+                "chart_points_per_series": 120,
+            }
         return payload
 
     def frame(self) -> str:

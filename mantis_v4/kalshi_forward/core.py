@@ -13,6 +13,7 @@ import os
 import random
 import threading
 import uuid
+from collections import deque
 from dataclasses import asdict, is_dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -67,21 +68,22 @@ def _json_value(value: Any):
 
 class ShadowStore:
     """Small append-only JSONL store with restart-safe deterministic dedupe."""
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, recent_id_limit: int | None = None):
         self.root = Path(root).resolve()
         self.root.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
-        self._ids = {name: {row.get(key) for row in self.read(name) if row.get(key)}
+        self.recent_id_limit = int(recent_id_limit) if recent_id_limit else None
+        self._ids = {name: {row.get(key) for row in self.read(name, limit=self.recent_id_limit) if row.get(key)}
                      for name, key in STREAM_KEYS.items()}
 
     def path(self, stream: str) -> Path:
         if stream not in STREAM_KEYS: raise ValueError(f"unknown shadow stream {stream}")
         return self.root / f"{stream}.jsonl"
 
-    def read(self, stream: str) -> list[dict]:
+    def read(self, stream: str, limit: int | None = None) -> list[dict]:
         path = self.path(stream)
         if not path.exists(): return []
-        rows = []
+        rows = [] if not limit else deque(maxlen=int(limit))
         with path.open("r", encoding="utf-8") as handle:
             lines=handle.readlines()
             for line_number, line in enumerate(lines, 1):
@@ -93,7 +95,7 @@ class ShadowStore:
                     raise ValueError(f"malformed {stream}.jsonl line {line_number}")
                 if not isinstance(row, dict): raise ValueError(f"non-object {stream} record")
                 rows.append(row)
-        return rows
+        return list(rows)
 
     def append(self, stream: str, record: dict) -> bool:
         key = STREAM_KEYS[stream]; identifier = record.get(key)
@@ -105,7 +107,9 @@ class ShadowStore:
                 handle.write(json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n")
                 handle.flush(); os.fsync(handle.fileno())
             self._ids[stream].add(identifier)
-        return True
+            if self.recent_id_limit and len(self._ids[stream]) > self.recent_id_limit:
+                self._ids[stream] = {row.get(key) for row in self.read(stream, limit=self.recent_id_limit) if row.get(key)}
+            return True
 
 
 def common_envelope(*, run_id: str, contract_id: str, asset: str, mapping,

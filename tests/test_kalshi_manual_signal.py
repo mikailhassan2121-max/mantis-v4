@@ -10,8 +10,9 @@ from types import SimpleNamespace
 
 from mantis_v4.economics.kalshi import KalshiEventQuote, KalshiMarketMapping
 from mantis_v4.manual_signal.core import (ASSETS, FEE_MODEL_VERSION, POLICY_VERSION,
+    MAX_TOTAL_ENTRY_COST, MIN_CONSERVATIVE_EDGE,
     FeeMetadata, FeeMetadataVerifier, KalshiFeeModel, ManualSignalStore, evaluate_candidate,
-    initial_manual_selection, select_primary_signal)
+    apply_signal_lock, initial_manual_selection, select_primary_signal)
 from mantis_v4.ui.voice import phrase_experimental_manual_signal
 from mantis_v4.manual_signal.live import _placeholder
 from mantis_v4.ui import CommandCenterState, PresentationConfig
@@ -93,21 +94,21 @@ class KalshiManualSignalTests(unittest.TestCase):
             mapping=mapping(),quote=quote(),quote_status="READY",dev_p95_bps=Decimal("5.47"),fee_metadata=fees(),now=NOW)
         self.assertEqual(close["status"],"REF AMBIGUOUS")
 
-    def test_first_completed_pre_t300_scan_clears_standby_and_populates_quotes(self):
+    def test_v2_can_signal_before_t300_and_populates_quotes(self):
         rows=[evaluate_candidate(snapshot=snapshot(a,seconds=873),mapping=mapping(a),quote=quote(a),
             quote_status="READY",dev_p95_bps=Decimal("10"),fee_metadata=fees(a),now=NOW) for a in ASSETS]
         selected=select_primary_signal(rows); op=selected["operator_state"]
         self.assertEqual(op["mode"],"KALSHI_MANUAL_SIGNAL")
-        self.assertEqual(op["headline"],"SCANNING")
-        self.assertEqual(op["reason"],"AWAITING T-300 ENTRY WINDOW")
-        self.assertEqual(op["seconds_until_entry_eligible"],573)
+        self.assertEqual(op["headline"],"PRIMARY SIGNAL")
+        self.assertEqual(op["reason"],"ALL EXPERIMENTAL GATES PASSED")
+        self.assertIsNone(op["seconds_until_entry_eligible"])
         self.assertTrue(op["first_scan_complete"])
         self.assertEqual(len(op["candidate_rankings"]),4)
-        self.assertTrue(all(r["status"]=="WAIT T-300" for r in op["candidate_rankings"]))
+        self.assertEqual(sum(r["status"]=="PRIMARY" for r in op["candidate_rankings"]),1)
         self.assertTrue(all(r["event_market_provider"]=="KALSHI_PUBLIC_REST" for r in rows))
         self.assertTrue(all(r["target"] and r["yes_ask"] and r["no_ask"] for r in rows))
         self.assertTrue(all(r["fee_provenance"]==fees(r["asset"]).fee_provenance for r in rows))
-        self.assertTrue(all("fee" not in r for r in rows))
+        self.assertTrue(all(r.get("fee") for r in rows))
         self.assertNotIn("WEBULL",str(op).upper())
 
     def test_yes_and_no_use_correct_asks(self):
@@ -156,6 +157,39 @@ class KalshiManualSignalTests(unittest.TestCase):
         self.assertEqual(costly["status"],"ECON FAIL")
         self.assertEqual(costly["reason"],"ECONOMICALLY IMPOSSIBLE")
 
+    def test_v2_timing_and_operator_economic_guards(self):
+        for seconds in (850,500,100):
+            row=evaluate_candidate(snapshot=snapshot(seconds=seconds),mapping=mapping(),quote=quote(),
+                quote_status="READY",dev_p95_bps=Decimal("5.47"),fee_metadata=fees(),now=NOW)
+            self.assertEqual(row["status"],"ELIGIBLE",seconds)
+        expensive=evaluate_candidate(snapshot=snapshot(p=.999,lcb=.99),mapping=mapping(),
+            quote=quote(yes=Decimal("0.98")),quote_status="READY",dev_p95_bps=Decimal("5.47"),
+            fee_metadata=fees(),now=NOW)
+        self.assertEqual(expensive["status"],"EXPENSIVE CONTRACT")
+        self.assertEqual(Decimal(expensive["max_total_entry_cost"]),MAX_TOTAL_ENTRY_COST)
+        thin=evaluate_candidate(snapshot=snapshot(p=.97,lcb=.94),mapping=mapping(),
+            quote=quote(yes=Decimal("0.92")),quote_status="READY",dev_p95_bps=Decimal("5.47"),
+            fee_metadata=fees(),now=NOW)
+        self.assertEqual(thin["status"],"ECON FAIL")
+        self.assertEqual(Decimal(thin["min_conservative_edge"]),MIN_CONSERVATIVE_EDGE)
+
+    def test_signal_lock_cannot_switch_or_disappear_and_resets_by_caller(self):
+        first=select_primary_signal([candidate(a) for a in ASSETS])
+        locked_state,locked=apply_signal_lock(first,None,NOW)
+        self.assertEqual(locked_state["operator_state"]["headline"],"LOCKED PRIMARY SIGNAL")
+        identity=(locked["asset"],locked["side"])
+        changed=[]
+        for asset in ASSETS:
+            row=candidate(asset,"NO" if asset==locked["asset"] else "YES")
+            row.update(status="CONF FAIL",economically_valid=False,confidence=.999)
+            changed.append(row)
+        later,still_locked=apply_signal_lock(select_primary_signal(changed),locked,NOW+timedelta(seconds=30))
+        self.assertEqual((still_locked["asset"],still_locked["side"]),identity)
+        self.assertEqual((later["selected"]["asset"],later["selected"]["side"]),identity)
+        self.assertFalse(any(row["status"]=="PRIMARY" for row in later["candidates"]))
+        self.assertTrue(later["selected"]["no_exit_signal"])
+        self.assertNotIn("SELL",str(later).upper()); self.assertNotIn("EXIT SIGNAL",str(later).upper().replace("NO EXIT SIGNAL",""))
+
     def test_economics_and_selector_at_most_one(self):
         rows=[candidate(a) for a in ASSETS]
         result=select_primary_signal(rows)
@@ -182,7 +216,8 @@ class KalshiManualSignalTests(unittest.TestCase):
 
     def test_append_only_dedupe_and_manual_labels(self):
         with tempfile.TemporaryDirectory() as tmp:
-            store=ManualSignalStore(Path(tmp)); selected=select_primary_signal([candidate(a) for a in ASSETS])["selected"]
+            store=ManualSignalStore(Path(tmp)); selection=select_primary_signal([candidate(a) for a in ASSETS])
+            selected=apply_signal_lock(selection,None,NOW)[0]["selected"]
             self.assertTrue(store.append(selected,NOW)); self.assertFalse(store.append(selected,NOW))
             text=(Path(tmp)/"signals.jsonl").read_text()
             self.assertIn('"manual_only":true',text); self.assertIn('"order_capability":"DISABLED"',text)

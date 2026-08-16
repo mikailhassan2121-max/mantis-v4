@@ -17,10 +17,14 @@ from pathlib import Path
 from typing import Any
 
 from mantis_v4.economics.kalshi import KALSHI_PROVIDER, SERIES_BY_ASSET
-from mantis_v4.kalshi_forward.core import ASSETS, MODEL_POLICY, original_qualified
+from mantis_v4.kalshi_forward.core import ASSETS, MODEL_POLICY
 from mantis_v4.reference.kalshi_reference_risk import assess_reference_risk
 
-POLICY_VERSION = "EXPERIMENTAL_MANUAL_SIGNAL_V1"
+LEGACY_POLICY_VERSION = "EXPERIMENTAL_MANUAL_SIGNAL_V1"
+POLICY_VERSION = "EXPERIMENTAL_MANUAL_SIGNAL_V2"
+ECONOMIC_GUARD_VERSION = "OPERATOR_ECONOMIC_GUARD_V1"
+MAX_TOTAL_ENTRY_COST = Decimal("0.95")
+MIN_CONSERVATIVE_EDGE = Decimal("0.02")
 REFERENCE_POLICY = "KALSHI_REFERENCE_RISK_V1_SHADOW / DEV_P95"
 ACTIONABILITY = "EXPERIMENTAL_MANUAL_SIGNAL_ONLY"
 VALIDATION_STATUS = "EXPERIMENTAL_NOT_YET_FORWARD_VALIDATED"
@@ -148,6 +152,14 @@ def _decimal(value) -> Decimal:
     return result
 
 
+def v2_quality_qualified(snapshot) -> bool:
+    """Transferred quality gates with only the historical T-300 gate removed."""
+    directional = snapshot.p_yes >= .95 or snapshot.p_yes <= .05
+    return bool(directional and snapshot.conservative_bound >= .90 and
+        snapshot.fragility <= 50 and snapshot.disagreement <= .05 and
+        snapshot.crossing_probability <= .35 and snapshot.reference_crossings <= 4)
+
+
 def evaluate_candidate(*, snapshot, mapping, quote, quote_status: str,
                        dev_p95_bps: Decimal | None, fee_metadata: FeeMetadata,
                        now: datetime, fee_model: KalshiFeeModel | None = None) -> dict:
@@ -181,10 +193,8 @@ def evaluate_candidate(*, snapshot, mapping, quote, quote_status: str,
             no_ask_size=str(quote.no_ask_size) if quote.no_ask_size is not None else None,
             quote_received_at_utc=quote.received_at_utc.isoformat(),
             quote_age_seconds=str(quote.quote_age_seconds),quote_verified=quote.quote_verified)
-    if snapshot.seconds_remaining>300:
-        candidate.update(status="WAIT T-300",reason="AWAITING T-300 ENTRY WINDOW"); return candidate
-    if not original_qualified(snapshot):
-        candidate.update(status="CONF FAIL",reason="FROZEN MODEL GATES NOT SATISFIED"); return candidate
+    if not v2_quality_qualified(snapshot):
+        candidate.update(status="CONF FAIL",reason="TRANSFERRED QUALITY GATES NOT SATISFIED"); return candidate
     risk=assess_reference_risk(asset=asset,target=mapping.target,proxy_current=_decimal(snapshot.current_price),
                                uncertainty_bound_bps=dev_p95_bps)
     candidate.update(reference_risk=risk.classification,distance_bps=str(risk.distance_bps) if risk.distance_bps is not None else None,
@@ -216,11 +226,17 @@ def evaluate_candidate(*, snapshot, mapping, quote, quote_status: str,
         fee_model=fee.fee_model,fee_provenance=fee_metadata.fee_provenance,
         fee_schedule_effective_date=fee_metadata.fee_schedule_effective_date,
         gross_ev=str(gross_ev),net_ev=str(net_ev),conservative_net_ev=str(conservative_net_ev),
-        net_break_even=str(net_break_even),model_edge=str(model_edge),conservative_edge=str(conservative_edge))
+        net_break_even=str(net_break_even),model_edge=str(model_edge),conservative_edge=str(conservative_edge),
+        economic_guard=ECONOMIC_GUARD_VERSION,max_total_entry_cost=str(MAX_TOTAL_ENTRY_COST),
+        min_conservative_edge=str(MIN_CONSERVATIVE_EDGE))
     if ask+fee.total_fee>=payout:
         candidate.update(status="ECON FAIL",reason="ECONOMICALLY IMPOSSIBLE"); return candidate
+    if fee.total_cost>=MAX_TOTAL_ENTRY_COST:
+        candidate.update(status="EXPENSIVE CONTRACT",reason="TOTAL COST AT OR ABOVE $0.95 OPERATOR LIMIT"); return candidate
     if net_ev<=0 or conservative_net_ev<=0:
         candidate.update(status="ECON FAIL",reason="POSITIVE POINT AND CONSERVATIVE EV REQUIRED"); return candidate
+    if conservative_edge<MIN_CONSERVATIVE_EDGE:
+        candidate.update(status="ECON FAIL",reason="CONSERVATIVE EDGE BELOW 2 PP OPERATOR MINIMUM"); return candidate
     candidate.update(status="ELIGIBLE",reason="ALL EXPERIMENTAL GATES PASSED",economically_valid=True)
     return candidate
 
@@ -240,17 +256,15 @@ def select_primary_signal(candidates: list[dict]) -> dict:
     ordered=[fixed[a] for a in ASSETS]
     strongest=selected or max(ordered,key=lambda r:(float(r.get("confidence") or 0),-ASSET_ORDER[r["asset"]]))
     reason="ALL EXPERIMENTAL GATES PASSED" if selected else strongest.get("reason","NO CANDIDATE")
-    waiting=bool(ordered) and all(r.get("status") in {"WAIT T-300","MARKET INITIALIZING","SCANNING"} for r in ordered)
+    waiting=bool(ordered) and all(r.get("status") in {"MARKET INITIALIZING","SCANNING","QUOTE UNAVAILABLE"} for r in ordered)
     headline="PRIMARY SIGNAL" if selected else ("SCANNING" if waiting else "NO SIGNAL")
-    seconds_values=[float(r["seconds_remaining"]) for r in ordered if r.get("seconds_remaining") is not None]
-    seconds_until=max(0.0,min(seconds_values)-300.0) if seconds_values else None
     operator={"mode":"KALSHI_MANUAL_SIGNAL","headline":headline,
         "reason":reason,"primary_selection":selected,"strongest_candidate":strongest,
         "candidate_rankings":ordered,"selection_policy_version":POLICY_VERSION,
         "policy":POLICY_VERSION,"actionability":ACTIONABILITY,"reference_policy":REFERENCE_POLICY,
         "validation_status":VALIDATION_STATUS,"manual_only":True,"production_validated":False,
         "manual_execution_only":True,"authentication":"NONE","order_capability":"DISABLED",
-        "event_market_provider":KALSHI_PROVIDER,"seconds_until_entry_eligible":seconds_until,
+        "event_market_provider":KALSHI_PROVIDER,"seconds_until_entry_eligible":None,
         "current_window":strongest.get("contract_id"),"first_scan_complete":True}
     return {"selection_policy":POLICY_VERSION,"status":operator["headline"],"selected":selected,
         "strongest_candidate":strongest,"candidates":ordered,"operator_state":operator}
@@ -260,27 +274,72 @@ class ManualSignalStore:
     """Append-only signal-only ledger; never records an operator trade."""
     def __init__(self, root: Path):
         self.root=Path(root).resolve(); self.root.mkdir(parents=True,exist_ok=True)
-        self.path=self.root/"signals.jsonl"; self._lock=threading.Lock(); self._ids=set()
+        self.path=self.root/"signals.jsonl"; self._lock=threading.Lock(); self._ids=set(); self._latest_record=None
         if self.path.exists():
             for line in self.path.read_text(encoding="utf-8").splitlines():
-                try: self._ids.add(json.loads(line)["signal_id"])
+                try:
+                    record=json.loads(line); self._ids.add(record["signal_id"]); self._latest_record=record
                 except (json.JSONDecodeError,KeyError): raise ValueError("manual signal ledger malformed")
+            if len(self._ids)>256:
+                recent=[json.loads(line)["signal_id"] for line in self.path.read_text(encoding="utf-8").splitlines()[-256:]]
+                self._ids=set(recent)
 
     @staticmethod
     def signal_id(signal: dict) -> str:
         return hashlib.sha256(f"{POLICY_VERSION}|{signal['contract_id']}|{signal['side']}".encode()).hexdigest()
 
     def append(self, signal: dict, observed_at: datetime) -> bool:
-        if signal.get("status")!="PRIMARY" or not signal.get("economically_valid"):
+        if signal.get("status") not in {"PRIMARY","LOCKED"} or not signal.get("economically_valid") or signal.get("signal_lock") is not True:
             raise ValueError("only valid experimental primary signals may be persisted")
         identifier=self.signal_id(signal)
-        record={"schema_version":"KALSHI_MANUAL_SIGNAL_V1","signal_id":identifier,
+        record={"schema_version":"KALSHI_MANUAL_SIGNAL_V2","signal_id":identifier,
             "policy_version":POLICY_VERSION,"reference_policy":REFERENCE_POLICY,"model_policy":MODEL_POLICY,
-            "observed_at_utc":observed_at.astimezone(UTC).isoformat(),**signal,
+            "observed_at_utc":observed_at.astimezone(UTC).isoformat(),"issued_at_utc":observed_at.astimezone(UTC).isoformat(),
+            "seconds_remaining_at_issue":signal.get("seconds_remaining"),"signal_lock_window":signal.get("window_end_utc"),
+            "signal_lock":True,**signal,
             "manual_only":True,"production_validated":False,"operator_traded":None,
             "authentication":"NONE","order_capability":"DISABLED"}
         with self._lock:
             if identifier in self._ids:return False
             with self.path.open("a",encoding="utf-8",newline="\n") as handle:
                 handle.write(json.dumps(record,sort_keys=True,separators=(",",":"))+"\n"); handle.flush(); os.fsync(handle.fileno())
-            self._ids.add(identifier); return True
+            self._ids.add(identifier); self._latest_record=record
+            if len(self._ids)>256:self._ids={identifier}
+            return True
+
+    def locked_for_window(self, window_end_utc: str) -> dict | None:
+        record=self._latest_record
+        if record and record.get("signal_lock") is True and record.get("window_end_utc")==window_end_utc:
+            return dict(record)
+        return None
+
+
+def apply_signal_lock(selection: dict, locked: dict | None, observed_at: datetime) -> tuple[dict, dict | None]:
+    """Freeze the first issued asset/side for a window; later scans are informational."""
+    selected=selection.get("selected")
+    if locked is None and selected:
+        locked=dict(selected); locked.update(issued_at_utc=observed_at.astimezone(UTC).isoformat(),
+            seconds_remaining_at_issue=selected.get("seconds_remaining"),signal_lock_window=selected.get("window_end_utc"),
+            signal_lock=True,policy_version=POLICY_VERSION)
+    if locked is None:return selection,None
+    current=next((r for r in selection["candidates"] if r.get("asset")==locked.get("asset")),None) or {}
+    if current.get("side")!=locked.get("side"): current_status="CONFIDENCE WEAKENED"
+    elif current.get("economically_valid") is True: current_status="STILL QUALIFIES"
+    elif current.get("status")=="REF AMBIGUOUS": current_status="REFERENCE AMBIGUOUS"
+    elif current.get("status")=="QUOTE STALE": current_status="QUOTE STALE"
+    elif current.get("status")=="QUOTE UNAVAILABLE": current_status="BOOK UNAVAILABLE"
+    elif current.get("status") in {"ECON FAIL","EXPENSIVE CONTRACT"}: current_status="ECONOMICS DETERIORATED"
+    else: current_status="ENTRY CONDITIONS NO LONGER PASS"
+    display=dict(locked); display.update(status="LOCKED",current_status=current_status,
+        current_candidate=current,no_exit_signal=True,economically_valid=True)
+    rows=[dict(r) for r in selection["candidates"]]
+    for row in rows:
+        if row.get("asset")==locked.get("asset"): row["status"]="LOCKED SIGNAL"
+        elif row.get("status")=="PRIMARY":
+            row["status"]="QUALIFIED"; row["reason"]="WINDOW SIGNAL ALREADY LOCKED"
+    op=dict(selection["operator_state"]); op.update(headline="LOCKED PRIMARY SIGNAL",
+        reason=current_status,primary_selection=display,strongest_candidate=display,
+        candidate_rankings=rows,current_window=locked.get("contract_id"),signal_lock=True,
+        no_exit_signal=True,seconds_until_entry_eligible=None)
+    return {**selection,"status":"LOCKED PRIMARY SIGNAL","selected":display,
+        "strongest_candidate":display,"candidates":rows,"operator_state":op},locked

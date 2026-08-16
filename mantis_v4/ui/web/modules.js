@@ -218,6 +218,14 @@
         if (F.has(host.rss_mb)) {
             list.push({ k: "RSS", v: host.rss_mb.toFixed(0) + " MB" });
         }
+        if (F.has(host.rss_peak_mb)) list.push({ k: "RSS PEAK", v: host.rss_peak_mb.toFixed(0) + " MB" });
+        list.push({ k: "MEMORY STATUS", v: host.memory_status || DASH,
+            cls: host.memory_status === "NORMAL" ? "ok" : "warnc" });
+        list.push({ k: "ACTIVE SSE CLIENTS", v: String(host.active_sse_clients || 0) });
+        if (host.buffer_counts) list.push({ k: "BUFFER COUNTS", v:
+            "SSE " + host.buffer_counts.sse_queued_frames + "/" +
+            ((host.active_sse_clients || 0) * host.buffer_counts.sse_queue_cap_per_client) +
+            "  CHART 3x" + host.buffer_counts.chart_points_per_series });
         rows(document.getElementById("process_rows"), list);
     }
 
@@ -270,7 +278,8 @@
         slab.className = "state-" + (selected ? (selected.side === "YES" ? "enter_yes" : "enter_no") :
             (headline === "SCANNING" ? "wait" : "no_trade"));
         centerWrite(snap, "decision_glyph", selected ? "◆" : (headline === "SCANNING" ? "◌" : "×"));
-        centerWrite(snap, "decision_label", selected ? "PRIMARY SIGNAL — " + selected.side : headline);
+        centerWrite(snap, "decision_label", selected ?
+            ((operator.signal_lock ? "LOCKED PRIMARY SIGNAL — " : "PRIMARY SIGNAL — ") + selected.side) : headline);
         centerWrite(snap, "decision_reason", "STATUS<b>" + esc(reason) + "</b>", true);
 
         var summaryRows = [
@@ -286,6 +295,15 @@
             { k: "MODEL STATUS", v: "EXPERIMENTAL — NOT YET FORWARD VALIDATED", cls: "warnc" },
             { k: "EXECUTION", v: "MANUAL ONLY", cls: "warnc" }
         ];
+        if (operator.signal_lock) {
+            summaryRows.splice(1, 0,
+                { k: "ISSUED AT", v: summary.issued_at_utc || DASH },
+                { k: "MODEL P / LCB AT ISSUE", v: F.pct(summary.confidence) + " / " + F.pct(summary.conservative_probability) },
+                { k: "ISSUED ASK / FEE", v: (F.has(summary.ask) ? F.money(summary.ask) : DASH) + " / " + (F.has(summary.fee) ? F.money(summary.fee) : DASH) },
+                { k: "TOTAL COST / CONS EDGE", v: (F.has(summary.total_cost) ? F.money(summary.total_cost) : DASH) + " / " + (F.has(summary.conservative_edge) ? F.pct(summary.conservative_edge, 1) : DASH) },
+                { k: "CURRENT STATE", v: summary.current_status || operator.reason, cls: summary.current_status === "STILL QUALIFIES" ? "ok" : "warnc" },
+                { k: "EXIT MODEL", v: "NO EXIT SIGNAL GENERATED", cls: "warnc" });
+        }
         if (eligibilitySeconds > 0) summaryRows.splice(1, 0,
             { k: "ENTRY ELIGIBLE IN", v: F.countdown(eligibilitySeconds), cls: "warnc" });
         rows(document.getElementById("primary_selection_summary"), summaryRows);

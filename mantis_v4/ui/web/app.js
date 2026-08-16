@@ -266,7 +266,8 @@
         if (!base) return false;
         var operator = snapshot.operator_state || {};
         if (operator.mode === "KALSHI_MANUAL_SIGNAL") {
-            return operator.policy === "EXPERIMENTAL_MANUAL_SIGNAL_V1" &&
+            return (operator.policy === "EXPERIMENTAL_MANUAL_SIGNAL_V1" ||
+                operator.policy === "EXPERIMENTAL_MANUAL_SIGNAL_V2") &&
                 operator.first_scan_complete === true;
         }
         return true;

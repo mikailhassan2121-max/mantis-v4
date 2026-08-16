@@ -101,10 +101,11 @@ def _health_record(run_id, asset, window, instant, status, detail=""):
         "observed_at_utc":instant.utc.isoformat(),"provider":"KALSHI_PUBLIC_REST","status":status,"detail":detail}
 
 
-def resolve_available(store: ShadowStore, provider: KalshiEventMarketProvider, run_id: str, now: datetime) -> int:
-    resolved = {r["contract_id"] for r in store.read("resolutions")}; count=0
+def resolve_available(store: ShadowStore, provider: KalshiEventMarketProvider, run_id: str, now: datetime,
+                      recent_limit: int | None = None) -> int:
+    resolved = {r["contract_id"] for r in store.read("resolutions", limit=recent_limit)}; count=0
     first_by_contract={}
-    for observation in store.read("observations"): first_by_contract.setdefault(observation["contract_id"],observation)
+    for observation in store.read("observations", limit=recent_limit): first_by_contract.setdefault(observation["contract_id"],observation)
     for contract_id, observation in first_by_contract.items():
         if contract_id in resolved or datetime.fromisoformat(observation["window_end_utc"]) > now: continue
         try:

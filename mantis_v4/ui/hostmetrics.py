@@ -23,6 +23,9 @@ except Exception:                      # pragma: no cover - absence is the norm
 
 _STARTED = time.time()
 _PROCESS = None
+_PEAK_RSS_MB = 0.0
+MEMORY_WARNING_MB = 768.0
+MEMORY_CRITICAL_MB = 1200.0
 if psutil is not None:
     try:
         _PROCESS = psutil.Process(os.getpid())
@@ -32,6 +35,7 @@ if psutil is not None:
 
 
 def host_payload(clients: Optional[int] = None) -> dict[str, Any]:
+    global _PEAK_RSS_MB
     data: dict[str, Any] = {
         "pid": os.getpid(),
         "threads": threading.active_count(),
@@ -45,6 +49,10 @@ def host_payload(clients: Optional[int] = None) -> dict[str, Any]:
         try:
             data["cpu_percent"] = float(_PROCESS.cpu_percent(None))
             data["rss_mb"] = float(_PROCESS.memory_info().rss) / (1024 * 1024)
+            _PEAK_RSS_MB=max(_PEAK_RSS_MB,data["rss_mb"])
+            data["rss_peak_mb"]=_PEAK_RSS_MB
+            data["memory_status"]=("CRITICAL" if data["rss_mb"]>=MEMORY_CRITICAL_MB else
+                                   "WARNING" if data["rss_mb"]>=MEMORY_WARNING_MB else "NORMAL")
         except Exception:
             pass                       # a metric that cannot be read is omitted
     return data

@@ -127,7 +127,7 @@ class BootLockTests(unittest.TestCase):
     def test_manual_hydration_requires_authoritative_completed_scan(self):
         app = (WEB / "app.js").read_text(encoding="utf-8")
         self.assertIn('operator.mode === "KALSHI_MANUAL_SIGNAL"', app)
-        self.assertIn('operator.policy === "EXPERIMENTAL_MANUAL_SIGNAL_V1"', app)
+        self.assertIn('operator.policy === "EXPERIMENTAL_MANUAL_SIGNAL_V2"', app)
         self.assertIn("operator.first_scan_complete === true", app)
         self.assertIn("bypass && !manual", app)
 
@@ -153,7 +153,7 @@ class BootLockTests(unittest.TestCase):
         self.assertIn("renderManualSignalCenter(snap, ticked);", modules)
         self.assertIn("return;", modules[modules.index('if (operator.mode === "KALSHI_MANUAL_SIGNAL")'):])
         self.assertIn("selected || strongest || {}", modules)
-        self.assertIn('centerWrite(snap, "decision_label", selected ? "PRIMARY SIGNAL — " + selected.side : headline)', modules)
+        self.assertIn('"LOCKED PRIMARY SIGNAL — " : "PRIMARY SIGNAL — "', modules)
         self.assertIn('centerWrite(snap, "contract_window", market)', modules)
         self.assertIn('centerWrite(snap, "contract_countdown", F.countdown(displayedSeconds))', modules)
         self.assertIn("operator.candidate_rankings || []", modules)
