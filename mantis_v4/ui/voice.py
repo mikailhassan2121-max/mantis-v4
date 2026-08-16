@@ -205,6 +205,13 @@ def phrase_primary_selection(asset: str, side: str, ask=None, probability=None) 
     if isinstance(probability,(int,float)): line+=f" Model probability {probability*100:.1f} percent."
     return line
 
+def phrase_experimental_manual_signal(asset: str, side: str, ask=None) -> str:
+    """Manual-only phrasing intentionally excludes BUY/ENTER/order language."""
+    line=f"MANTIS experimental signal. {spoken_asset(asset)} fifteen minute. {side.title()}."
+    try: line+=f" Kalshi ask {int(round(float(ask)*100))} cents."
+    except (TypeError,ValueError): pass
+    return line+" Manual entry only."
+
 
 def phrase_data_hold(asset: str, reason: str = "") -> str:
     if "STALE" in str(reason).upper():

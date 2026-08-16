@@ -230,6 +230,7 @@
         var operator = snap.operator_state || {};
         var selected = operator.primary_selection || null;
         var strongest = operator.strongest_candidate || null;
+        var manual = operator.mode === "KALSHI_MANUAL_SIGNAL";
         if (snap.presentation && snap.presentation.operator_diagnostics) {
             console.info("MANTIS_OPERATOR", "FRONTEND_RENDERED_CENTER", operator.mode || "STANDBY");
         }
@@ -261,11 +262,27 @@
         // The backend owns operator semantics; these assignments intentionally
         // override the legacy selector-derived labels above.
         document.getElementById("decision_label").textContent = selected ?
-            "PRIMARY SELECTION — ENTER " + selected.side : (operator.headline || "STANDBY");
+            (manual ? "PRIMARY SIGNAL — " : "PRIMARY SELECTION — ENTER ") + selected.side : (operator.headline || "STANDBY");
         document.getElementById("decision_reason").innerHTML =
             "STATUS<b>" + esc(operator.reason || "AWAITING FIRST SCANNER SNAPSHOT") + "</b>";
         var summary = selected || strongest || {};
-        rows(document.getElementById("primary_selection_summary"), [
+        var summaryRows = manual ? [
+            { k: "MANTIS", v: "KALSHI EXPERIMENTAL MANUAL SIGNAL", cls: "warnc" },
+            { k: selected ? "PRIMARY SIGNAL" : "STRONGEST CURRENT CANDIDATE", v: summary.asset ? summary.asset.replace("-USD", "") + " / 15M / " + (summary.side || DASH) : DASH, cls: selected ? "ok" : "warnc" },
+            { k: "MODEL / CONSERVATIVE PROB", v: F.pct(summary.confidence) + " / " + F.pct(summary.conservative_probability) },
+            { k: "KALSHI TARGET / PROXY CURRENT", v: F.has(summary.target) ? F.price(summary.target) + " / " + F.price(summary.proxy_current) : DASH },
+            { k: "DISTANCE / REFERENCE RISK", v: F.has(summary.distance_bps) ? F.num(summary.distance_bps, 2, " bp") + " / " + F.words(summary.reference_risk) + " DEV_P95" : DASH },
+            { k: (summary.side || "EVENT") + " ASK / SIZE", v: F.has(summary.ask) ? F.money(summary.ask) + " / " + F.num(summary.ask_size, 4) : "UNAVAILABLE" },
+            { k: "KALSHI FEE / TOTAL COST", v: F.has(summary.fee) ? F.money(summary.fee) + " / " + F.money(summary.total_cost) : "UNVERIFIED" },
+            { k: "BREAK-EVEN", v: F.pct(summary.net_break_even) },
+            { k: "MODEL / CONS EDGE", v: F.has(summary.model_edge) ? F.pct(summary.model_edge, 1) + " / " + F.pct(summary.conservative_edge, 1) : DASH },
+            { k: "NET / CONS EV", v: F.has(summary.net_ev) ? F.money(summary.net_ev) + " / " + F.money(summary.conservative_net_ev) : DASH },
+            { k: "EVENT MARKET SOURCE", v: "KALSHI_PUBLIC_REST" },
+            { k: "KALSHI MARKET", v: summary.market_ticker || DASH },
+            { k: "TIME REMAINING", v: F.has(summary.seconds_remaining) ? F.countdown(summary.seconds_remaining) : DASH },
+            { k: "MODEL STATUS", v: "EXPERIMENTAL — NOT YET FORWARD VALIDATED", cls: "warnc" },
+            { k: "EXECUTION", v: "MANUAL ONLY", cls: "warnc" }
+        ] : [
             { k: selected ? "PRIMARY CONTRACT SELECTION" : "STRONGEST CURRENT CANDIDATE", v: summary.asset ? summary.asset.replace("-USD", "") + " / 15M" : DASH, cls: selected ? "ok" : "warnc" },
             { k: "SIDE / MODEL CONF", v: (summary.side || DASH) + " / " + F.pct(summary.confidence) },
             { k: "CONSERVATIVE PROB", v: F.pct(summary.conservative_probability) },
@@ -275,13 +292,16 @@
             { k: "MODEL / CONS EDGE", v: F.has(summary.model_edge) ? F.pct(summary.model_edge, 1) + " / " + F.pct(summary.conservative_edge, 1) : DASH },
             { k: "NET / CONS EV", v: F.has(summary.net_ev) ? F.money(summary.net_ev) + " / " + F.money(summary.conservative_net_ev) : DASH },
             { k: "ACTION", v: selected ? "PRIMARY SELECTION" : "WAIT / NO TRADE", cls: selected ? "ok" : "warnc" }
-        ]);
+        ];
+        rows(document.getElementById("primary_selection_summary"), summaryRows);
         if (!selected && F.has(operator.seconds_until_entry_eligible) && operator.seconds_until_entry_eligible > 0) {
             document.getElementById("primary_selection_summary").innerHTML += '<div class="row"><span class="k">EARLIEST ENTRY IN</span><span class="v warnc">'+esc(F.countdown(operator.seconds_until_entry_eligible))+'</span></div>';
         }
-        var table='<div class="rank-head"><span>ASSET</span><span>SIDE</span><span>CONF</span><span>ASK</span><span>NET EDGE</span><span>STATUS</span></div>';
+        var table=manual ? '<div class="rank-head"><span>ASSET</span><span>SIDE</span><span>MODEL %</span><span>REF RISK / ASK</span><span>FEE / CONS EDGE</span><span>STATUS</span></div>' : '<div class="rank-head"><span>ASSET</span><span>SIDE</span><span>CONF</span><span>ASK</span><span>NET EDGE</span><span>STATUS</span></div>';
         (operator.candidate_rankings || []).forEach(function(c){
-            table+='<div class="rank-row"><span>'+esc(String(c.asset||"").replace("-USD",""))+'</span><span>'+esc(c.side||DASH)+'</span><span>'+esc(F.pct(c.confidence))+'</span><span>'+esc(F.has(c.ask)?F.money(c.ask):DASH)+'</span><span>'+esc(F.has(c.model_edge)?F.pct(c.model_edge,1):DASH)+'</span><span class="'+(c.status==="ACTIONABLE"?"ok":"warnc")+'">'+esc(selected&&selected.asset===c.asset?"SELECTED":(c.reason||c.status))+'</span></div>';
+            var fourth=manual ? F.words(c.reference_risk)+" / "+(F.has(c.ask)?F.money(c.ask):DASH) : (F.has(c.ask)?F.money(c.ask):DASH);
+            var fifth=manual ? (F.has(c.fee)?F.money(c.fee):DASH)+" / "+(F.has(c.conservative_edge)?F.pct(c.conservative_edge,1):DASH) : (F.has(c.model_edge)?F.pct(c.model_edge,1):DASH);
+            table+='<div class="rank-row"><span>'+esc(String(c.asset||"").replace("-USD",""))+'</span><span>'+esc(c.side||DASH)+'</span><span>'+esc(F.pct(c.confidence))+'</span><span>'+esc(fourth)+'</span><span>'+esc(fifth)+'</span><span class="'+(c.status==="PRIMARY"?"ok":"warnc")+'">'+esc(selected&&selected.asset===c.asset?(manual?"PRIMARY":"SELECTED"):(c.status||c.reason))+'</span></div>';
         });
         document.getElementById("candidate_ranking").innerHTML=table;
 

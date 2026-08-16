@@ -89,9 +89,12 @@ def build_parser():
  modes.add_argument("--self-test",action="store_true",help="run isolated persistence/web checks without touching forward data")
  modes.add_argument("--kalshi-check",action="store_true",help="check anonymous read-only Kalshi 15-minute event quotes and exit")
  modes.add_argument("--kalshi-forward-shadow",action="store_true",help="run isolated non-actionable Kalshi forward-shadow collection")
+ modes.add_argument("--kalshi-manual-signals",action="store_true",help="run anonymous experimental manual-only Kalshi signals")
+ modes.add_argument("--kalshi-manual-diagnostics",action="store_true",help="print one real Step 10 manual-signal scan and exit")
  modes.add_argument("--kalshi-forward-audit",action="store_true",help="audit isolated Kalshi forward-shadow records and exit")
  modes.add_argument("--kalshi-forward-report",action="store_true",help="report matured isolated Kalshi shadow observations and exit")
  modes.add_argument("--kalshi-shadow-dir",default="data/kalshi_forward_shadow",metavar="PATH",help="isolated Kalshi shadow data directory")
+ modes.add_argument("--kalshi-manual-signal-dir",default="data/kalshi_manual_signal",metavar="PATH",help="isolated append-only experimental signal directory")
  modes.add_argument("--kalshi-shadow-simulate",type=int,metavar="WINDOWS",help="run deterministic accelerated Kalshi shadow simulation")
  modes.add_argument("--forward-report",action="store_true",help="print the read-only Phase 11 forward report and exit")
  modes.add_argument("--daily-report",nargs="?",const="TODAY",metavar="YYYY-MM-DD",help="print a UTC daily forward summary and exit")
@@ -277,6 +280,8 @@ def main():
  cfg.enabled_assets=list(cfg.assets)
  if args.kalshi_forward_shadow:
   return _run_kalshi_forward_shadow(root,args,cfg)
+ if args.kalshi_manual_signals or args.kalshi_manual_diagnostics:
+  return _run_kalshi_manual_signals(root,args,cfg,ui_config,diagnostic=args.kalshi_manual_diagnostics)
  if not cfg.voice_enabled: ui_config.voice_enabled=False
  if args.demo: return run_demo(ui_config,cfg,args)
 
@@ -472,6 +477,73 @@ def _run_kalshi_forward_shadow(root,args,cfg):
  shadow_path=_scoped_path(root,args.kalshi_shadow_dir,"Kalshi shadow directory")
  result=run_live_shadow(root=root,output=shadow_path,config=cfg,once=args.once)
  return 0 if result["audit"]["status"]=="PASS" else 1
+
+def _run_kalshi_manual_signals(root,args,cfg,ui_config,diagnostic=False):
+ """Anonymous experimental signals; no EventBus, account, or order capability."""
+ from mantis_v4.manual_signal import initial_manual_selection
+ from mantis_v4.manual_signal.live import ManualSignalEngine,render_manual_diagnostics
+ from mantis_v4.ui import CommandCenter,CommandCenterState,build_audio,build_voice
+ from mantis_v4.ui.voice import phrase_experimental_manual_signal
+ shadow_path=_scoped_path(root,args.kalshi_shadow_dir,"Kalshi shadow directory")
+ signal_path=_scoped_path(root,args.kalshi_manual_signal_dir,"Kalshi manual signal directory")
+ state=CommandCenterState(cfg.active_assets,ui_config)
+ state.set_status(run_id="EXPERIMENTAL",software_version="MANTIS 4.x",
+  model_version="KALSHI_REFERENCE_V1",policy_name="EXPERIMENTAL_MANUAL_SIGNAL_V1",
+  underlying_provider="YAHOO_PROXY",underlying_state="STARTING",webull_status="NOT USED",
+  economics_provider="KALSHI_PUBLIC_REST",economics_status="EXPERIMENTAL",
+  audio_enabled=ui_config.audio_enabled,voice_enabled=ui_config.voice_enabled,
+  started_at=datetime.now(UTC),reference_status="KALSHI TARGET / YAHOO PROXY",
+  quote_status="STARTING",forward_logger_status="SHADOW")
+ state.set_primary_selection(initial_manual_selection())
+ engine=ManualSignalEngine(root=root,config=cfg,shadow_dir=shadow_path,signal_dir=signal_path)
+ audio=build_audio(ui_config); voice=build_voice(ui_config)
+ clock=Clock(); tz=load_timezone(cfg.contract_timezone); server=None; center=None
+ ready=False; pending=None
+ if not diagnostic and ui_config.ui_enabled and ui_config.ui_mode=="web" and not args.once:
+  def armed():
+   nonlocal ready
+   ready=True
+  server=_start_web(state,ui_config,root,on_ready=armed)
+ elif not diagnostic and ui_config.ui_enabled:
+  center=CommandCenter(state,ui_config,local_timezone=cfg.contract_timezone)
+  if not args.once:center.start()
+  ready=True
+ try:
+  while True:
+   instant=clock.capture(); window=ContractWindow.for_instant(instant,tz)
+   snapshots,selection,persisted=engine.scan(instant,window,persist_signal=not diagnostic)
+   for snapshot in snapshots: state.update_from_snapshot(snapshot)
+   state.set_primary_selection(selection,persisted=persisted)
+   if args.operator_diagnostics and not diagnostic:
+    print("MANTIS_MANUAL_OPERATOR "+json.dumps(selection["operator_state"],default=str,sort_keys=True))
+   state.record_scan(last_scan_utc=instant.utc,underlying_state="LIVE",
+    quote_status="KALSHI PUBLIC",economics_status="EXPERIMENTAL")
+   if persisted: pending=selection.get("selected")
+   if ready and pending:
+    voice.say(phrase_experimental_manual_signal(pending["asset"],pending["side"],pending.get("ask")))
+    pending=None
+   if diagnostic:
+    print(render_manual_diagnostics(selection))
+   elif center is None and server is None:
+    print(json.dumps({"mode":"EXPERIMENTAL_MANUAL_SIGNAL_ONLY","operator_state":selection["operator_state"],
+     "authentication_count":0,"orders_submitted":0},indent=2,default=str))
+   if args.once or diagnostic:break
+   time.sleep(max(0.2,cfg.scan_interval_seconds))
+ except KeyboardInterrupt:pass
+ finally:
+  from mantis_v4.runtime import stop_browser
+  engine.close()
+  browser=getattr(server,"browser_process",None) if server else None
+  if center is not None:
+   if args.once:center.render_once()
+   center.stop()
+  if server is not None:server.stop()
+  audio.stop();voice.stop()
+  if browser is not None:stop_browser(browser)
+  print("KALSHI EXPERIMENTAL MANUAL SIGNAL STOPPED")
+  print("AUTHENTICATION .......... NONE")
+  print("ORDER CAPABILITY ........ DISABLED")
+ return 0
 
 # ---------------------------------------------------------------------------
 # Presentation helpers. Each one is failure-isolated from the scan loop.
