@@ -96,6 +96,7 @@ def launch(url: str, profile_dir: Optional[Path] = None, fullscreen: bool = True
     arguments = [
         executable,
         f"--app={url}",
+        "--new-window",
         "--no-first-run",
         "--no-default-browser-check",
         "--disable-features=Translate,AutofillServerCommunication",

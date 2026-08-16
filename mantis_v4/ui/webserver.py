@@ -17,6 +17,7 @@ web front end must not add an install step for the operator.
 from __future__ import annotations
 
 import json
+import hashlib
 import secrets
 import threading
 import time
@@ -100,7 +101,19 @@ class CommandCenterServer:
         self._presentation_token = secrets.token_urlsafe(24)
         self.failures = 0
         self._sequence = 0
+        self.frontend_build_id = self._asset_build_id()
+        self.frontend_rendered: dict = {}
         self.disabled_reason: Optional[str] = None
+
+    def _asset_build_id(self) -> str:
+        """Identify the exact shell bytes served by this process."""
+        digest = hashlib.sha256()
+        for name in ("index.html", "app.css", "audio.js", "format.js",
+                     "modules.js", "boot.js", "app.js"):
+            target = self.web_root / name
+            digest.update(name.encode("utf-8"))
+            digest.update(target.read_bytes())
+        return digest.hexdigest()[:16]
 
     # -- lifecycle ----------------------------------------------------------
 
@@ -151,6 +164,8 @@ class CommandCenterServer:
                                             datetime.now(UTC), clients)
         self._sequence += 1
         payload["sequence"] = self._sequence
+        payload["frontend_build_id"] = self.frontend_build_id
+        payload["presentation"]["frontend_build_id"] = self.frontend_build_id
         payload["presentation"]["ready_token"] = self._presentation_token
         return payload
 
@@ -228,7 +243,14 @@ class CommandCenterServer:
         if not target.is_file():
             return None
         content_type = CONTENT_TYPES.get(target.suffix.lower(), "application/octet-stream")
-        return target.read_bytes(), content_type
+        body = target.read_bytes()
+        if target.name == "index.html":
+            text = body.decode("utf-8")
+            text = text.replace("__MANTIS_BUILD_ID__", self.frontend_build_id)
+            for name in ("app.css", "audio.js", "format.js", "modules.js", "boot.js", "app.js"):
+                text = text.replace(f'{name}\"', f'{name}?build={self.frontend_build_id}\"')
+            body = text.encode("utf-8")
+        return body, content_type
 
     def read_branding(self, relative: str) -> Optional[tuple[bytes, str]]:
         """Read one supplied branding image without exposing the repository."""
@@ -263,7 +285,9 @@ def _make_handler(server: CommandCenterServer):
             self.send_response(status)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
-            self.send_header("Cache-Control", "no-store")
+            self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
+            self.send_header("Pragma", "no-cache")
+            self.send_header("Expires", "0")
             self.end_headers()
             self.wfile.write(body)
 
@@ -279,6 +303,21 @@ def _make_handler(server: CommandCenterServer):
             if route == "/snapshot.json":
                 self._send(server.frame().encode("utf-8"),
                            "application/json; charset=utf-8")
+                return
+            if route == "/frontend-rendered.json":
+                self._send(json.dumps(server.frontend_rendered, separators=(",", ":")).encode("utf-8"),
+                           "application/json; charset=utf-8")
+                return
+            if route == "/frontend-rendered":
+                query = parse_qs(parsed.query)
+                token = query.get("token", [""])[0]
+                if not secrets.compare_digest(token, server._presentation_token):
+                    self._send(b"forbidden", "text/plain; charset=utf-8", status=403)
+                    return
+                allowed = ("mode", "headline", "reason", "sequence", "source", "asset",
+                           "market", "countdown", "candidate_rows")
+                server.frontend_rendered = {key: query.get(key, [""])[0] for key in allowed}
+                self._send(b"recorded", "text/plain; charset=utf-8")
                 return
             if route == "/presentation-ready":
                 # One-way presentation acknowledgement only. It cannot reach
@@ -309,7 +348,9 @@ def _make_handler(server: CommandCenterServer):
         def _stream(self):
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
-            self.send_header("Cache-Control", "no-store")
+            self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
+            self.send_header("Pragma", "no-cache")
+            self.send_header("Expires", "0")
             self.send_header("Connection", "keep-alive")
             self.end_headers()
 

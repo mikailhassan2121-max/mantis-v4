@@ -223,14 +223,139 @@
 
     /* ------------------------------------------------- active contract view */
 
-    function renderContract(snap, ticked) {
-        var view = focused(snap) || {asset:"SYSTEM", classification:{key:"unknown",label:"STANDBY"},
-            final:{key:"unknown",label:"STANDBY"}, provider:{}, economics:{}};
-        var selection = snap.primary_selection || {};
+    function centerWrite(snap, nodeId, value, html) {
+        var node = document.getElementById(nodeId);
+        if (!node) return;
+        if (html) node.innerHTML = value;
+        else node.textContent = value;
+        if (snap.presentation && snap.presentation.operator_diagnostics) {
+            console.info("CENTER_WRITE", "source=MANUAL_SIGNAL", "node=" + nodeId,
+                "value=" + node.textContent, "sequence=" + snap.sequence);
+        }
+    }
+
+    function renderManualSignalCenter(snap, ticked) {
         var operator = snap.operator_state || {};
         var selected = operator.primary_selection || null;
         var strongest = operator.strongest_candidate || null;
-        var manual = operator.mode === "KALSHI_MANUAL_SIGNAL";
+        var summary = selected || strongest || {};
+        var contractSeconds = F.has(summary.seconds_remaining) ? Number(summary.seconds_remaining) : ticked;
+        var eligibilitySeconds = F.has(operator.seconds_until_entry_eligible) ?
+            Number(operator.seconds_until_entry_eligible) : null;
+        var displayedSeconds = eligibilitySeconds > 0 ? eligibilitySeconds : contractSeconds;
+        var headline = operator.headline || (operator.first_scan_complete ? "NO SIGNAL" : "SCANNING");
+        var reason = operator.reason || (operator.first_scan_complete ? "NO CURRENT SIGNAL" : "AWAITING FIRST KALSHI SCAN");
+        var status = summary.status || "SCANNING";
+        var asset = summary.asset || "KALSHI 15M";
+        var market = summary.market_ticker || operator.current_window || "AWAITING CURRENT MARKET";
+
+        document.documentElement.dataset.renderedMode = "KALSHI_MANUAL_SIGNAL";
+        document.documentElement.dataset.renderedHeadline = headline;
+        document.documentElement.dataset.renderedReason = reason;
+        document.documentElement.dataset.renderedSequence = String(snap.sequence);
+        document.documentElement.dataset.centerRenderSource = "MANUAL_SIGNAL";
+
+        centerWrite(snap, "contract_asset", String(asset).replace("-USD", ""));
+        centerWrite(snap, "contract_window", market);
+        centerWrite(snap, "contract_countdown", F.countdown(displayedSeconds));
+        centerWrite(snap, "contract_mark", eligibilitySeconds > 0 ? "ENTRY ELIGIBLE IN" : "CONTRACT TIME REMAINING");
+        var countdown = document.getElementById("contract_countdown");
+        countdown.className = !F.has(displayedSeconds) ? "" :
+            (displayedSeconds <= 30 ? "final" : (displayedSeconds <= 120 ? "near" : ""));
+
+        var elapsed = F.has(contractSeconds) ? Math.max(0, Math.min(1, (900 - contractSeconds) / 900)) : 0;
+        document.querySelector("#window_meter > i").style.width = (elapsed * 100).toFixed(1) + "%";
+
+        var slab = document.getElementById("decision_slab");
+        slab.className = "state-" + (selected ? (selected.side === "YES" ? "enter_yes" : "enter_no") :
+            (headline === "SCANNING" ? "wait" : "no_trade"));
+        centerWrite(snap, "decision_glyph", selected ? "◆" : (headline === "SCANNING" ? "◌" : "×"));
+        centerWrite(snap, "decision_label", selected ? "PRIMARY SIGNAL — " + selected.side : headline);
+        centerWrite(snap, "decision_reason", "STATUS<b>" + esc(reason) + "</b>", true);
+
+        var summaryRows = [
+            { k: selected ? "PRIMARY SIGNAL" : "FOCUS", v: summary.asset ? summary.asset.replace("-USD", "") + " / 15M" : DASH, cls: selected ? "ok" : "warnc" },
+            { k: "MODEL SIDE / CONFIDENCE", v: (summary.side || DASH) + " / " + F.pct(summary.confidence) },
+            { k: "CONSERVATIVE PROB", v: F.pct(summary.conservative_probability) },
+            { k: "KALSHI TARGET", v: F.has(summary.target) ? F.price(summary.target) : DASH },
+            { k: "PROXY CURRENT", v: F.has(summary.proxy_current) ? F.price(summary.proxy_current) : DASH },
+            { k: "REFERENCE RISK", v: F.words(summary.reference_risk || "REFERENCE UNKNOWN") + " / DEV_P95" },
+            { k: "STATUS", v: status, cls: status === "PRIMARY" ? "ok" : "warnc" },
+            { k: "MARKET", v: market },
+            { k: "EVENT MARKET SOURCE", v: operator.event_market_provider || "KALSHI_PUBLIC_REST" },
+            { k: "MODEL STATUS", v: "EXPERIMENTAL — NOT YET FORWARD VALIDATED", cls: "warnc" },
+            { k: "EXECUTION", v: "MANUAL ONLY", cls: "warnc" }
+        ];
+        if (eligibilitySeconds > 0) summaryRows.splice(1, 0,
+            { k: "ENTRY ELIGIBLE IN", v: F.countdown(eligibilitySeconds), cls: "warnc" });
+        rows(document.getElementById("primary_selection_summary"), summaryRows);
+
+        var table = '<div class="rank-head"><span>ASSET</span><span>SIDE</span><span>MODEL %</span><span>REF RISK / ASK</span><span>FEE / CONS EDGE</span><span>STATUS</span></div>';
+        (operator.candidate_rankings || []).forEach(function (c) {
+            table += '<div class="rank-row"><span>' + esc(String(c.asset || "").replace("-USD", "")) +
+                '</span><span>' + esc(c.side || DASH) + '</span><span>' + esc(F.pct(c.confidence)) +
+                '</span><span>' + esc(F.words(c.reference_risk || "REFERENCE UNKNOWN") + " / " + (F.has(c.ask) ? F.money(c.ask) : DASH)) +
+                '</span><span>' + esc((F.has(c.fee) ? F.money(c.fee) : DASH) + " / " + (F.has(c.conservative_edge) ? F.pct(c.conservative_edge, 1) : DASH)) +
+                '</span><span class="' + (c.status === "PRIMARY" ? "ok" : "warnc") + '">' + esc(c.status || c.reason || "NO SIGNAL") + '</span></div>';
+        });
+        document.getElementById("candidate_ranking").innerHTML = table;
+
+        rows(document.getElementById("cell_confidence"), [
+            { k: "MODEL CONFIDENCE", html: meter(summary.confidence) + " " + F.pct(summary.confidence) },
+            { k: "CONSERVATIVE PROB", html: meter(summary.conservative_probability) + " " + F.pct(summary.conservative_probability) },
+            { k: "MODEL SIDE", v: summary.side || DASH }
+        ]);
+        rows(document.getElementById("cell_underlying"), [
+            { k: "PROXY CURRENT", v: F.has(summary.proxy_current) ? F.price(summary.proxy_current) : DASH },
+            { k: "KALSHI TARGET", v: F.has(summary.target) ? F.price(summary.target) : DASH },
+            { k: "DISTANCE", v: F.has(summary.distance_bps) ? F.num(summary.distance_bps, 2, " bp") : DASH }
+        ]);
+        rows(document.getElementById("cell_risk"), [
+            { k: "REFERENCE RISK", v: F.words(summary.reference_risk || "REFERENCE UNKNOWN") },
+            { k: "FRAGILITY", v: F.num(summary.fragility, 1) },
+            { k: "DISAGREEMENT", v: F.num(summary.disagreement, 4) },
+            { k: "CROSSING RISK", v: F.pct(summary.crossing_probability) }
+        ]);
+        rows(document.getElementById("cell_class"), [
+            { k: "POLICY", v: operator.policy || DASH },
+            { k: "STATUS", v: status },
+            { k: "REASON", v: reason }
+        ]);
+        rows(document.getElementById("cell_econ"), [
+            { k: (summary.side || "EVENT") + " ASK", v: F.has(summary.ask) ? F.money(summary.ask) : "UNAVAILABLE" },
+            { k: "ASK SIZE", v: F.has(summary.ask_size) ? F.num(summary.ask_size, 4) : DASH },
+            { k: "FEE", v: F.has(summary.fee) ? F.money(summary.fee) : "NOT YET EVALUATED" },
+            { k: "CONSERVATIVE EDGE", v: F.has(summary.conservative_edge) ? F.pct(summary.conservative_edge, 1) : DASH }
+        ]);
+        rows(document.getElementById("cell_contract"), [
+            { k: "MARKET", v: market },
+            { k: "CONTRACT REMAINING", v: F.countdown(contractSeconds) },
+            { k: "SOURCE", v: operator.event_market_provider || "KALSHI_PUBLIC_REST" },
+            { k: "EXECUTION", v: "MANUAL ONLY" }
+        ]);
+        global.dispatchEvent(new CustomEvent("mantis:center-rendered", { detail: {
+            mode: "KALSHI_MANUAL_SIGNAL", headline: headline, reason: reason,
+            sequence: snap.sequence, source: "MANUAL_SIGNAL", asset: asset,
+            market: market, countdown: F.countdown(displayedSeconds),
+            candidate_rows: (operator.candidate_rankings || []).length
+        }}));
+    }
+
+    function renderContract(snap, ticked) {
+        var operator = snap.operator_state || {};
+        if (operator.mode === "KALSHI_MANUAL_SIGNAL") {
+            renderManualSignalCenter(snap, ticked);
+            return;
+        }
+        var view = focused(snap) || {asset:"SYSTEM", classification:{key:"unknown",label:"STANDBY"},
+            final:{key:"unknown",label:"STANDBY"}, provider:{}, economics:{}};
+        var selection = snap.primary_selection || {};
+        var selected = operator.primary_selection || null;
+        var strongest = operator.strongest_candidate || null;
+        var manual = false;
+        document.body.setAttribute("data-rendered-mode", operator.mode || "STANDBY");
+        document.body.setAttribute("data-rendered-headline", operator.headline || "STANDBY");
+        document.body.setAttribute("data-rendered-sequence", String(snap.sequence));
         if (snap.presentation && snap.presentation.operator_diagnostics) {
             console.info("MANTIS_OPERATOR", "FRONTEND_RENDERED_CENTER", operator.mode || "STANDBY");
         }
@@ -698,6 +823,7 @@
         renderClock: renderClock, renderIdentity: renderIdentity,
         renderEngine: renderEngine, renderTelemetry: renderTelemetry,
         renderProcess: renderProcess, renderContract: renderContract,
+        renderManualSignalCenter: renderManualSignalCenter,
         renderSurveillance: renderSurveillance, renderForwardView: renderForwardView,
         renderDiagnostics: renderDiagnostics, renderEconomics: renderEconomics,
         renderProviders: renderProviders, renderMap: renderMap,

@@ -58,6 +58,12 @@ body {
     cursor: default;
 }
 
+#frontend_error:not([hidden]) {
+  position: fixed; inset: 0; z-index: 100000; display: grid; place-items: center;
+  background: #000; color: #ff5c5c; font: 700 2.2vh/1.2 monospace;
+  letter-spacing: .16em;
+}
+
 /* The upstream background: a faint dot at every grid intersection, produced by
  * two gradients over the grey. body.solid switches it off, which is how the
  * boot sequence flashes between grid and solid. */

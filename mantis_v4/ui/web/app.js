@@ -30,6 +30,8 @@
         sseSnapshotsDuringBoot: 0,
         domRendersDuringBoot: 0,
         hydrationRenders: 0,
+        lastSequence: -1,
+        frontendBuildId: "",
         serverOffsetMs: 0,
         lastDecisions: Object.create(null),
         lastContract: Object.create(null)
@@ -130,6 +132,13 @@
         if (reason === "hydration") state.hydrationRenders++;
         var view = activeView();
         var focus = M.focused(snapshot);
+        var manualCenter = view === "contract" && snapshot.operator_state &&
+            snapshot.operator_state.mode === "KALSHI_MANUAL_SIGNAL";
+
+        // Manual operator state does not live in the legacy asset shells. Draw
+        // its center first and exclusively so a failure in a peripheral module
+        // cannot leave the initial STANDBY markup on screen.
+        if (manualCenter) M.renderManualSignalCenter(snapshot, interpolate(focus));
 
         M.renderClock(snapshot);
         M.renderIdentity(snapshot);
@@ -142,7 +151,7 @@
         M.renderMatrix(snapshot);
         M.renderBandForward(snapshot);
 
-        if (view === "contract") M.renderContract(snapshot, interpolate(focus));
+        if (view === "contract" && !manualCenter) M.renderContract(snapshot, interpolate(focus));
         else if (view === "surveillance") M.renderSurveillance(snapshot);
         else if (view === "forward") M.renderForwardView(snapshot);
         else if (view === "diagnostics") M.renderDiagnostics(snapshot);
@@ -162,9 +171,36 @@
 
     /* ------------------------------------------------------------ transport */
 
-    function apply(snapshot) {
+    function showFrontendError(message) {
+        var target = document.getElementById("frontend_error");
+        if (target) { target.hidden = false; target.textContent = message; }
+        document.body.setAttribute("data-frontend-error", message);
+        console.error("MANTIS_FRONTEND", message);
+    }
+
+    function buildMatches(snapshot) {
+        var backend = snapshot && (snapshot.frontend_build_id ||
+            (snapshot.presentation || {}).frontend_build_id);
+        if (!backend || !state.frontendBuildId || backend !== state.frontendBuildId) {
+            showFrontendError("FRONTEND VERSION MISMATCH");
+            return false;
+        }
+        return true;
+    }
+
+    function apply(snapshot, source) {
+        if (!snapshot || typeof snapshot !== "object") return false;
+        var sequence = Number(snapshot.sequence);
+        if (!Number.isFinite(sequence)) return false;
+        if (sequence <= state.lastSequence) {
+            diagnostic("STATE_REJECTED", "source=" + (source || "unknown") + " sequence=" + sequence);
+            return false;
+        }
+        if (!buildMatches(snapshot)) return false;
+        state.lastSequence = sequence;
         var first = state.snapshot === null;
         state.snapshot = snapshot;
+        diagnostic("STATE_ACCEPTED", "source=" + (source || "unknown") + " sequence=" + sequence);
         if (snapshot.presentation && snapshot.presentation.operator_diagnostics) {
             console.info("MANTIS_OPERATOR", "FRONTEND_RECEIVED", snapshot.sequence,
                 snapshot.operator_state || null);
@@ -174,7 +210,7 @@
 
         if (!state.ready) {
             state.sseSnapshotsDuringBoot++;
-            return; // boot lock: cache and clock sync only; never touch the DOM
+            return true; // boot lock: cache and clock sync only; never touch the DOM
         }
 
         M.pushHistory(snapshot);
@@ -193,6 +229,7 @@
             routeEvent(M.renderStream(snapshot, snapshot.presentation
                 ? snapshot.presentation.event_log_rows + 6 : 14));
         }
+        return true;
     }
 
     function connect() {
@@ -201,9 +238,13 @@
             state.connected = true;
             document.getElementById("offline").hidden = true;
             try {
-                apply(JSON.parse(event.data));
+                var parsed = JSON.parse(event.data);
+                diagnostic("SSE_EVENT", "sequence=" + parsed.sequence);
+                apply(parsed, "sse");
             } catch (e) {
                 // A malformed frame is dropped; the next one redraws everything.
+                diagnostic("SSE_EVENT_ERROR", String(e && e.message ? e.message : e));
+                console.error("MANTIS_SSE_EVENT_ERROR", e);
             }
         };
         source.onerror = function () {
@@ -216,12 +257,19 @@
     /* ----------------------------------------------------------------- boot */
 
     function structurallyComplete(snapshot) {
-        return !!(snapshot && snapshot.type === "snapshot" && snapshot.server_time_utc &&
+        var base = !!(snapshot && snapshot.type === "snapshot" && snapshot.server_time_utc &&
             snapshot.status && snapshot.branding && snapshot.presentation &&
             Array.isArray(snapshot.assets) && snapshot.assets.length > 0 &&
             snapshot.assets.every(function (asset) {
                 return asset && typeof asset.asset === "string" && asset.final && asset.classification;
             }));
+        if (!base) return false;
+        var operator = snapshot.operator_state || {};
+        if (operator.mode === "KALSHI_MANUAL_SIGNAL") {
+            return operator.policy === "EXPERIMENTAL_MANUAL_SIGNAL_V1" &&
+                operator.first_scan_complete === true;
+        }
+        return true;
     }
 
     function truthfulHold(snapshot) {
@@ -238,7 +286,8 @@
     }
 
     function waitForSnapshot(timeoutSeconds, bypass) {
-        if (bypass || structurallyComplete(state.snapshot)) return Promise.resolve(true);
+        var manual = state.snapshot && (state.snapshot.operator_state || {}).mode === "KALSHI_MANUAL_SIGNAL";
+        if ((bypass && !manual) || structurallyComplete(state.snapshot)) return Promise.resolve(true);
         state.lifecycle = "HYDRATING";
         return new Promise(function (resolve) {
             var deadline = Date.now() + Math.max(1000, timeoutSeconds * 1000);
@@ -312,6 +361,18 @@
         diagnostic(event.detail.name, event.detail.detail);
     });
 
+    var lastRenderedTelemetry = "";
+    global.addEventListener("mantis:center-rendered", function (event) {
+        var detail = event.detail || {};
+        var signature = [detail.sequence, detail.mode, detail.headline, detail.reason,
+            detail.asset, detail.market, detail.countdown, detail.candidate_rows].join("|");
+        if (!state.readyToken || signature === lastRenderedTelemetry) return;
+        lastRenderedTelemetry = signature;
+        var query = new URLSearchParams(detail);
+        query.set("token", state.readyToken);
+        fetch("/frontend-rendered?" + query.toString(), { cache: "no-store" }).catch(function () {});
+    });
+
     function postReady() {
         if (state.readyPosted) return;
         state.readyPosted = true;
@@ -321,12 +382,16 @@
 
     function start() {
         bindTabs();
+        var buildNode = document.getElementById("frontend_build");
+        state.frontendBuildId = buildNode ? buildNode.getAttribute("data-build-id") : "";
+        document.body.setAttribute("data-frontend-build-id", state.frontendBuildId);
+        console.info("MANTIS_FRONTEND_BUILD", state.frontendBuildId);
 
         diagnostic("BROWSER_PAGE_LOADED");
 
         // Prime with one snapshot so the boot sequence can hand over to a
         // populated screen rather than an empty one.
-        fetch("/snapshot.json").then(function (r) { return r.json(); }).then(function (snapshot) {
+        fetch("/snapshot.json", { cache: "no-store", headers: { "Cache-Control": "no-cache" } }).then(function (r) { return r.json(); }).then(function (snapshot) {
             diagnostic("SERVER_READY");
             var p = snapshot.presentation || {};
             state.readyToken = p.ready_token || "";
@@ -334,7 +399,7 @@
             if (p.scanlines === false) document.body.classList.add("no-scanlines");
             A.init(p.audio_enabled !== false && p.boot_audio !== false, p.master_volume);
 
-            apply(snapshot);
+            apply(snapshot, "initial");
             connect(); // cache every SSE frame while the opaque boot lock is held
 
             return global.MantisBoot.run({
@@ -387,6 +452,8 @@
 
     global.MantisAppLifecycle = {
         state: state,
+        apply: apply,
+        buildMatches: buildMatches,
         structurallyComplete: structurallyComplete,
         truthfulHold: truthfulHold
     };

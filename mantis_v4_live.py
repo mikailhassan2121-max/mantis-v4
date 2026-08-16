@@ -124,7 +124,8 @@ def _start_web(state,ui_config,root,on_ready=None):
  state.set_status(http_server_status="LIVE")
  if ui_config.web_open_browser:
   profile=root/"data"/"ui-profile"
-  process=webshell.launch(server.url,profile_dir=profile,fullscreen=ui_config.web_fullscreen)
+  launch_url=f"{server.url}?build={server.frontend_build_id}"
+  process=webshell.launch(launch_url,profile_dir=profile,fullscreen=ui_config.web_fullscreen)
   server.browser_process=process
   state.set_status(browser_shell_status="LIVE" if process is not None else "UNAVAILABLE")
   if process is None:

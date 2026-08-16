@@ -124,6 +124,59 @@ class BootLockTests(unittest.TestCase):
         self.assertEqual(app.count('draw("hydration")'), 1)
         self.assertIn("prehydrateDom=", app)
 
+    def test_manual_hydration_requires_authoritative_completed_scan(self):
+        app = (WEB / "app.js").read_text(encoding="utf-8")
+        self.assertIn('operator.mode === "KALSHI_MANUAL_SIGNAL"', app)
+        self.assertIn('operator.policy === "EXPERIMENTAL_MANUAL_SIGNAL_V1"', app)
+        self.assertIn("operator.first_scan_complete === true", app)
+        self.assertIn("bypass && !manual", app)
+
+    def test_snapshot_sequence_is_monotonic_and_sse_recovers(self):
+        app = (WEB / "app.js").read_text(encoding="utf-8")
+        self.assertIn("lastSequence: -1", app)
+        self.assertIn("sequence <= state.lastSequence", app)
+        self.assertIn('apply(parsed, "sse")', app)
+        self.assertIn("MANTIS_SSE_EVENT_ERROR", app)
+        self.assertIn('fetch("/snapshot.json", { cache: "no-store"', app)
+
+    def test_manual_render_uses_backend_headline_and_rows(self):
+        modules = (WEB / "modules.js").read_text(encoding="utf-8")
+        self.assertIn('operator.headline || "STANDBY"', modules)
+        self.assertIn("operator.candidate_rankings || []", modules)
+        self.assertIn('data-rendered-mode', modules)
+        self.assertNotIn("!operator.primary_selection ? \"STANDBY\"", modules)
+
+    def test_manual_center_is_exclusive_and_does_not_require_primary(self):
+        app = (WEB / "app.js").read_text(encoding="utf-8")
+        modules = (WEB / "modules.js").read_text(encoding="utf-8")
+        self.assertIn('if (operator.mode === "KALSHI_MANUAL_SIGNAL")', modules)
+        self.assertIn("renderManualSignalCenter(snap, ticked);", modules)
+        self.assertIn("return;", modules[modules.index('if (operator.mode === "KALSHI_MANUAL_SIGNAL")'):])
+        self.assertIn("selected || strongest || {}", modules)
+        self.assertIn('centerWrite(snap, "decision_label", selected ? "PRIMARY SIGNAL — " + selected.side : headline)', modules)
+        self.assertIn('centerWrite(snap, "contract_window", market)', modules)
+        self.assertIn('centerWrite(snap, "contract_countdown", F.countdown(displayedSeconds))', modules)
+        self.assertIn("operator.candidate_rankings || []", modules)
+        self.assertIn("if (manualCenter) M.renderManualSignalCenter", app)
+        self.assertIn('view === "contract" && !manualCenter', app)
+
+    def test_manual_center_exposes_exact_dom_truth(self):
+        modules = (WEB / "modules.js").read_text(encoding="utf-8")
+        for token in ("document.documentElement.dataset.renderedMode",
+                      "document.documentElement.dataset.renderedHeadline",
+                      "document.documentElement.dataset.renderedReason",
+                      "document.documentElement.dataset.renderedSequence",
+                      "document.documentElement.dataset.centerRenderSource"):
+            self.assertIn(token, modules)
+        self.assertIn('source: "MANUAL_SIGNAL"', modules)
+        self.assertIn('candidate_rows: (operator.candidate_rankings || []).length', modules)
+
+    def test_frontend_build_mismatch_is_visible(self):
+        app = (WEB / "app.js").read_text(encoding="utf-8")
+        html = (WEB / "index.html").read_text(encoding="utf-8")
+        self.assertIn("FRONTEND VERSION MISMATCH", app)
+        self.assertIn("__MANTIS_BUILD_ID__", html)
+
 
 class ProcessedBrandAssetTests(unittest.TestCase):
     ORIGINAL_HASHES = {

@@ -4,7 +4,7 @@ Two jobs, the same two the Rich front end had to satisfy: prove the shell is
 handed backend state faithfully, and prove it cannot damage anything below it.
 The web layer adds a socket, so it also has to prove the socket is read-only.
 """
-import contextlib,io,json,tempfile,threading,time,unittest,urllib.error,urllib.request
+import contextlib,io,json,tempfile,threading,time,unittest,urllib.error,urllib.request,urllib.parse
 from unittest.mock import patch
 from datetime import datetime,timedelta,timezone
 from pathlib import Path
@@ -136,6 +136,9 @@ class ServerTests(unittest.TestCase):
   with urllib.request.urlopen(self.server.url.rstrip("/")+path,timeout=5) as response:
    return response.status,response.read()
 
+ def get_response(self,path):
+  return urllib.request.urlopen(self.server.url.rstrip("/")+path,timeout=5)
+
  def test_binds_loopback_only(self):
   self.assertEqual(self.server.host,"127.0.0.1")
 
@@ -162,6 +165,34 @@ class ServerTests(unittest.TestCase):
   payload=json.loads(body)
   self.assertEqual(status,200)
   self.assertEqual(payload["assets"][0]["asset"],"BTC-USD")
+
+ def test_frontend_assets_are_versioned_and_never_cached(self):
+  with self.get_response("/") as response:
+   html=response.read().decode("utf-8")
+   self.assertEqual(response.headers["Cache-Control"],"no-store, no-cache, must-revalidate")
+   self.assertEqual(response.headers["Pragma"],"no-cache")
+   self.assertEqual(response.headers["Expires"],"0")
+  self.assertIn(self.server.frontend_build_id,html)
+  self.assertIn("modules.js?build="+self.server.frontend_build_id,html)
+  with self.get_response("/snapshot.json") as response:
+   payload=json.loads(response.read())
+   self.assertEqual(response.headers["Pragma"],"no-cache")
+  self.assertEqual(payload["frontend_build_id"],self.server.frontend_build_id)
+  self.assertEqual(payload["presentation"]["frontend_build_id"],self.server.frontend_build_id)
+
+ def test_frontend_render_telemetry_is_token_scoped_and_read_only(self):
+  payload=json.loads(self.get("/snapshot.json")[1])
+  token=payload["presentation"]["ready_token"]
+  query=urllib.parse.urlencode({"token":token,"mode":"KALSHI_MANUAL_SIGNAL",
+   "headline":"SCANNING","reason":"AWAITING T-300 ENTRY WINDOW","sequence":"1372",
+   "source":"MANUAL_SIGNAL","asset":"SOL-USD","market":"KXSOL15M-TEST",
+   "countdown":"01:38","candidate_rows":"4"})
+  self.assertEqual(self.get("/frontend-rendered?"+query)[0],200)
+  rendered=json.loads(self.get("/frontend-rendered.json")[1])
+  self.assertEqual(rendered["headline"],"SCANNING")
+  self.assertEqual(rendered["candidate_rows"],"4")
+  with self.assertRaises(urllib.error.HTTPError):
+   self.get("/frontend-rendered?token=wrong&headline=STANDBY")
 
  def test_path_traversal_is_refused(self):
   for path in ("/../settings.py","/../../mantis_v4_live.py","/..%2fsettings.py"):
