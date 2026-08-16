@@ -87,6 +87,12 @@ def build_parser():
  modes.add_argument("--demo",action="store_true",help="run the interface on synthetic states, clearly labelled")
  modes.add_argument("--health-check",action="store_true",help="inspect installation and configuration without starting the scanner")
  modes.add_argument("--self-test",action="store_true",help="run isolated persistence/web checks without touching forward data")
+ modes.add_argument("--kalshi-check",action="store_true",help="check anonymous read-only Kalshi 15-minute event quotes and exit")
+ modes.add_argument("--kalshi-forward-shadow",action="store_true",help="run isolated non-actionable Kalshi forward-shadow collection")
+ modes.add_argument("--kalshi-forward-audit",action="store_true",help="audit isolated Kalshi forward-shadow records and exit")
+ modes.add_argument("--kalshi-forward-report",action="store_true",help="report matured isolated Kalshi shadow observations and exit")
+ modes.add_argument("--kalshi-shadow-dir",default="data/kalshi_forward_shadow",metavar="PATH",help="isolated Kalshi shadow data directory")
+ modes.add_argument("--kalshi-shadow-simulate",type=int,metavar="WINDOWS",help="run deterministic accelerated Kalshi shadow simulation")
  modes.add_argument("--forward-report",action="store_true",help="print the read-only Phase 11 forward report and exit")
  modes.add_argument("--daily-report",nargs="?",const="TODAY",metavar="YYYY-MM-DD",help="print a UTC daily forward summary and exit")
  modes.add_argument("--forward-manifest",action="store_true",help="print forward dataset counts, schemas and hashes")
@@ -227,6 +233,18 @@ def run_demo(ui_config,cfg,args):
 
 def main():
  args=build_parser().parse_args(); root=Path(__file__).resolve().parent
+ if args.kalshi_check:
+  from mantis_v4.economics.kalshi import render_kalshi_check
+  report,ready=render_kalshi_check(); print(report); return 0 if ready else 1
+ if args.kalshi_forward_audit or args.kalshi_forward_report or args.kalshi_shadow_simulate:
+  from mantis_v4.kalshi_forward import ShadowStore,audit_store,render_audit,shadow_report,simulate_shadow
+  shadow_path=_scoped_path(root,args.kalshi_shadow_dir,"Kalshi shadow directory")
+  if args.kalshi_shadow_simulate:
+   result=simulate_shadow(shadow_path,args.kalshi_shadow_simulate)
+   print(json.dumps(result,indent=2,sort_keys=True)); return 0 if result["audit"]["status"]=="PASS" else 1
+  if args.kalshi_forward_report:
+   print(json.dumps(shadow_report(ShadowStore(shadow_path)),indent=2,sort_keys=True)); return 0
+  result=audit_store(ShadowStore(shadow_path)); print(render_audit(result)); return 0 if result["status"]=="PASS" else 1
  forward_path=_scoped_path(root,args.forward_dir,"forward directory")
  manual_path=_scoped_path(root,args.manual_economics,"manual economics path")
  args.forward_dir=str(forward_path.relative_to(root))
@@ -257,6 +275,8 @@ def main():
  # historical research universe. Historical ADA records remain readable.
  cfg.assets=list(__import__("mantis_v4.selection",fromlist=["LIVE_ASSETS"]).LIVE_ASSETS)
  cfg.enabled_assets=list(cfg.assets)
+ if args.kalshi_forward_shadow:
+  return _run_kalshi_forward_shadow(root,args,cfg)
  if not cfg.voice_enabled: ui_config.voice_enabled=False
  if args.demo: return run_demo(ui_config,cfg,args)
 
@@ -445,6 +465,13 @@ def main():
   try: _print_session_summary(store,engine.run_id)
   except Exception: pass
  return 0
+
+def _run_kalshi_forward_shadow(root,args,cfg):
+ """Enter the isolated Step 9 runner before any live selector/UI/voice exists."""
+ from mantis_v4.kalshi_forward.live import run_live_shadow
+ shadow_path=_scoped_path(root,args.kalshi_shadow_dir,"Kalshi shadow directory")
+ result=run_live_shadow(root=root,output=shadow_path,config=cfg,once=args.once)
+ return 0 if result["audit"]["status"]=="PASS" else 1
 
 # ---------------------------------------------------------------------------
 # Presentation helpers. Each one is failure-isolated from the scan loop.

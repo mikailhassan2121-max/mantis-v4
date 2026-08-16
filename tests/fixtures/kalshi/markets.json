@@ -1,0 +1,1 @@
+{"markets":[{"ticker":"KXBTC15M-WINDOW","event_ticker":"KXBTC15M-EVENT","status":"active","open_time":"2026-08-15T20:15:00Z","close_time":"2026-08-15T20:30:00Z"},{"ticker":"KXBTC15M-NEXT","event_ticker":"KXBTC15M-NEXT-EVENT","status":"initialized","open_time":"2026-08-15T20:30:00Z","close_time":"2026-08-15T20:45:00Z"}]}
