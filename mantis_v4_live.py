@@ -482,6 +482,7 @@ def _run_kalshi_forward_shadow(root,args,cfg):
 def _run_kalshi_manual_signals(root,args,cfg,ui_config,diagnostic=False):
  """Anonymous experimental signals; no EventBus, account, or order capability."""
  from mantis_v4.manual_signal import initial_manual_selection
+ from mantis_v4.manual_signal.core import V22_POLICY
  from mantis_v4.manual_signal.live import ManualSignalEngine,render_manual_diagnostics
  from mantis_v4.ui import CommandCenter,CommandCenterState,build_audio,build_voice
  from mantis_v4.ui.voice import phrase_experimental_manual_signal
@@ -489,14 +490,15 @@ def _run_kalshi_manual_signals(root,args,cfg,ui_config,diagnostic=False):
  signal_path=_scoped_path(root,args.kalshi_manual_signal_dir,"Kalshi manual signal directory")
  state=CommandCenterState(cfg.active_assets,ui_config)
  state.set_status(run_id="EXPERIMENTAL",software_version="MANTIS 4.x",
-  model_version="KALSHI_REFERENCE_V1",policy_name="EXPERIMENTAL_MANUAL_SIGNAL_V2",
+  model_version="KALSHI_REFERENCE_V1",policy_name=V22_POLICY.version,
   underlying_provider="YAHOO_PROXY",underlying_state="STARTING",webull_status="NOT USED",
   economics_provider="KALSHI_PUBLIC_REST",economics_status="EXPERIMENTAL",
   audio_enabled=ui_config.audio_enabled,voice_enabled=ui_config.voice_enabled,
   started_at=datetime.now(UTC),reference_status="KALSHI TARGET / YAHOO PROXY",
   quote_status="STARTING",forward_logger_status="SHADOW")
- state.set_primary_selection(initial_manual_selection())
+ state.set_primary_selection(initial_manual_selection(V22_POLICY))
  engine=ManualSignalEngine(root=root,config=cfg,shadow_dir=shadow_path,signal_dir=signal_path)
+ state.set_status(run_id=engine.run_id,git_commit=engine.git_commit)
  audio=build_audio(ui_config); voice=build_voice(ui_config)
  clock=Clock(); tz=load_timezone(cfg.contract_timezone); server=None; center=None
  ready=False; pending=None

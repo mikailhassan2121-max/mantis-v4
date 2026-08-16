@@ -33,6 +33,7 @@
         lastSequence: -1,
         frontendBuildId: "",
         serverOffsetMs: 0,
+        tabsBound: false,
         lastDecisions: Object.create(null),
         lastContract: Object.create(null)
     };
@@ -40,7 +41,11 @@
     /* --------------------------------------------------------------- views */
 
     function bindTabs() {
+        if (state.tabsBound) return;
+        state.tabsBound = true;
         document.querySelectorAll("#tabs li").forEach(function (tab) {
+            if (tab.dataset.mantisBound === "true") return;
+            tab.dataset.mantisBound = "true";
             tab.addEventListener("click", function () {
                 document.querySelectorAll("#tabs li").forEach(function (t) {
                     t.classList.remove("active");
@@ -50,8 +55,9 @@
                 document.querySelectorAll(".view").forEach(function (v) {
                     v.classList.toggle("active", v.id === "view_" + target);
                 });
+                document.documentElement.dataset.activeView = target;
                 A.play("init_pulse");
-                draw();
+                draw("tab");
             });
         });
 
@@ -163,7 +169,9 @@
             M.renderClock(state.snapshot);
             M.renderMap(state.snapshot);
             if (activeView() === "contract") {
-                M.renderContract(state.snapshot, interpolate(M.focused(state.snapshot)));
+                if ((state.snapshot.operator_state || {}).mode === "KALSHI_MANUAL_SIGNAL")
+                    M.renderManualSignalCenter(state.snapshot, interpolate(M.focused(state.snapshot)));
+                else M.renderContract(state.snapshot, interpolate(M.focused(state.snapshot)));
             }
         }
         global.requestAnimationFrame(tick);
@@ -267,7 +275,8 @@
         var operator = snapshot.operator_state || {};
         if (operator.mode === "KALSHI_MANUAL_SIGNAL") {
             return (operator.policy === "EXPERIMENTAL_MANUAL_SIGNAL_V1" ||
-                operator.policy === "EXPERIMENTAL_MANUAL_SIGNAL_V2") &&
+                (operator.policy === "EXPERIMENTAL_MANUAL_SIGNAL_V2" ||
+                 operator.policy === "EXPERIMENTAL_MANUAL_SIGNAL_V2_1")) &&
                 operator.first_scan_complete === true;
         }
         return true;
@@ -373,6 +382,15 @@
         query.set("token", state.readyToken);
         fetch("/frontend-rendered?" + query.toString(), { cache: "no-store" }).catch(function () {});
     });
+    var lastTabTelemetry="";
+    global.addEventListener("mantis:tab-rendered",function(event){
+        var detail=event.detail||{};
+        var signature=[detail.view,detail.sequence,detail.row_count,detail.text].join("|");
+        if(!state.readyToken || signature===lastTabTelemetry)return;
+        lastTabTelemetry=signature;
+        var query=new URLSearchParams(detail); query.set("token",state.readyToken);
+        fetch("/frontend-rendered?"+query.toString(),{cache:"no-store"}).catch(function(){});
+    });
 
     function postReady() {
         if (state.readyPosted) return;
@@ -383,6 +401,11 @@
 
     function start() {
         bindTabs();
+        var requestedView = new URLSearchParams(global.location.search).get("view");
+        if (/^(contract|surveillance|forward|diagnostics)$/.test(requestedView || "")) {
+            var requestedTab=document.querySelector('#tabs li[data-view="'+requestedView+'"]');
+            if (requestedTab) requestedTab.click();
+        }
         var buildNode = document.getElementById("frontend_build");
         state.frontendBuildId = buildNode ? buildNode.getAttribute("data-build-id") : "";
         document.body.setAttribute("data-frontend-build-id", state.frontendBuildId);

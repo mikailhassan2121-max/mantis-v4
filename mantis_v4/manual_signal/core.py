@@ -10,6 +10,7 @@ import json
 import math
 import os
 import threading
+from collections import Counter, deque
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal, ROUND_CEILING
@@ -22,10 +23,15 @@ from mantis_v4.reference.kalshi_reference_risk import assess_reference_risk
 
 LEGACY_POLICY_VERSION = "EXPERIMENTAL_MANUAL_SIGNAL_V1"
 POLICY_VERSION = "EXPERIMENTAL_MANUAL_SIGNAL_V2"
+V21_POLICY_VERSION = "EXPERIMENTAL_MANUAL_SIGNAL_V2_1"
+V22_POLICY_VERSION = "EXPERIMENTAL_MANUAL_SIGNAL_V2_2_ACTIVE"
 ECONOMIC_GUARD_VERSION = "OPERATOR_ECONOMIC_GUARD_V1"
 MAX_TOTAL_ENTRY_COST = Decimal("0.95")
 MIN_CONSERVATIVE_EDGE = Decimal("0.02")
+V21_MIN_CONSERVATIVE_EDGE = Decimal("0.015")
+V22_MIN_CONSERVATIVE_EDGE = Decimal("0.01")
 REFERENCE_POLICY = "KALSHI_REFERENCE_RISK_V1_SHADOW / DEV_P95"
+V22_REFERENCE_POLICY = "KALSHI_REFERENCE_RISK_V1_SHADOW / DEVELOPMENT_P50_CAUTION_P95_ROBUST"
 ACTIONABILITY = "EXPERIMENTAL_MANUAL_SIGNAL_ONLY"
 VALIDATION_STATUS = "EXPERIMENTAL_NOT_YET_FORWARD_VALIDATED"
 FEE_MODEL_VERSION = "KALSHI_QUADRATIC_TAKER_2026_07_07_V1"
@@ -37,26 +43,44 @@ CENTICENT = Decimal("0.0001")
 ONE = Decimal("1.0000")
 
 
-def initial_manual_selection() -> dict:
+@dataclass(frozen=True)
+class ManualSignalPolicy:
+    version: str
+    confidence: float
+    conservative_probability: float
+    fragility: float
+    disagreement: float
+    crossing_probability: float
+    crossings: int
+    min_conservative_edge: Decimal
+    tiered_reference_risk: bool = False
+
+
+V2_POLICY = ManualSignalPolicy(POLICY_VERSION,.95,.90,50,.05,.35,4,MIN_CONSERVATIVE_EDGE)
+V21_POLICY = ManualSignalPolicy(V21_POLICY_VERSION,.92,.87,55,.06,.42,5,V21_MIN_CONSERVATIVE_EDGE)
+V22_POLICY = ManualSignalPolicy(V22_POLICY_VERSION,.88,.83,60,.075,.50,6,V22_MIN_CONSERVATIVE_EDGE,True)
+
+
+def initial_manual_selection(policy: ManualSignalPolicy = V2_POLICY) -> dict:
     """Authoritative state published before the first potentially slow scan."""
     rows=[{"asset":asset,"side":None,"confidence":None,"conservative_probability":None,
         "fragility":None,"disagreement":None,"crossing_probability":None,"crossings":None,
         "seconds_remaining":None,"status":"SCANNING","reason":"AWAITING FIRST KALSHI SCAN",
-        "policy_version":POLICY_VERSION,"event_market_provider":KALSHI_PROVIDER,
+        "policy_version":policy.version,"event_market_provider":KALSHI_PROVIDER,
         "manual_only":True,"production_validated":False,"authentication":"NONE",
         "order_capability":"DISABLED","economically_valid":False,
         "reference_risk":"REFERENCE_UNKNOWN"} for asset in ASSETS]
     operator={"mode":"KALSHI_MANUAL_SIGNAL","headline":"SCANNING",
         "reason":"AWAITING FIRST KALSHI SCAN","primary_selection":None,
         "strongest_candidate":None,"candidate_rankings":rows,
-        "selection_policy_version":POLICY_VERSION,"policy":POLICY_VERSION,
-        "actionability":ACTIONABILITY,"reference_policy":REFERENCE_POLICY,
+        "selection_policy_version":policy.version,"policy":policy.version,
+        "actionability":ACTIONABILITY,"reference_policy":V22_REFERENCE_POLICY if policy.tiered_reference_risk else REFERENCE_POLICY,
         "validation_status":VALIDATION_STATUS,"manual_only":True,
         "production_validated":False,"manual_execution_only":True,
         "authentication":"NONE","order_capability":"DISABLED",
         "event_market_provider":KALSHI_PROVIDER,"seconds_until_entry_eligible":None,
         "current_window":None,"first_scan_complete":False}
-    return {"selection_policy":POLICY_VERSION,"status":"SCANNING","selected":None,
+    return {"selection_policy":policy.version,"status":"SCANNING","selected":None,
         "strongest_candidate":None,"candidates":rows,"operator_state":operator}
 
 
@@ -160,9 +184,33 @@ def v2_quality_qualified(snapshot) -> bool:
         snapshot.crossing_probability <= .35 and snapshot.reference_crossings <= 4)
 
 
+def quality_gate_failures(snapshot, policy: ManualSignalPolicy) -> list[dict]:
+    """Return every failed transparent gate; time remaining is intentionally absent."""
+    confidence=max(snapshot.p_yes,snapshot.p_no)
+    checks=(("CONFIDENCE",confidence,policy.confidence,">="),
+            ("CONSERVATIVE",snapshot.conservative_bound,policy.conservative_probability,">="),
+            ("FRAGILITY",snapshot.fragility,policy.fragility,"<="),
+            ("DISAGREEMENT",snapshot.disagreement,policy.disagreement,"<="),
+            ("CROSSING PROBABILITY",snapshot.crossing_probability,policy.crossing_probability,"<="),
+            ("CROSSINGS",snapshot.reference_crossings,policy.crossings,"<="))
+    failed=[]
+    for name,value,threshold,operator in checks:
+        passed=value>=threshold if operator==">=" else value<=threshold
+        if not passed:
+            failed.append({"gate":name,"value":float(value),"operator":operator,
+                           "threshold":float(threshold)})
+    return failed
+
+
+def quality_qualified(snapshot, policy: ManualSignalPolicy) -> bool:
+    return not quality_gate_failures(snapshot,policy)
+
+
 def evaluate_candidate(*, snapshot, mapping, quote, quote_status: str,
                        dev_p95_bps: Decimal | None, fee_metadata: FeeMetadata,
-                       now: datetime, fee_model: KalshiFeeModel | None = None) -> dict:
+                       now: datetime, fee_model: KalshiFeeModel | None = None,
+                       policy: ManualSignalPolicy = V2_POLICY,
+                       dev_p50_bps: Decimal | None = None) -> dict:
     """Evaluate one asset in a fixed fail-closed order without changing probability."""
     fee_model=fee_model or KalshiFeeModel(); asset=snapshot.asset
     confidence=Decimal(str(max(snapshot.p_yes,snapshot.p_no)))
@@ -175,8 +223,9 @@ def evaluate_candidate(*, snapshot, mapping, quote, quote_status: str,
         "series_ticker":mapping.series_ticker,"event_ticker":mapping.event_ticker,"market_ticker":mapping.market_ticker,
         "target":str(mapping.target),"proxy_current":str(snapshot.current_price),
         "event_market_source":KALSHI_PROVIDER,"event_market_provider":KALSHI_PROVIDER,
-        "quote_provenance":KALSHI_PROVIDER,"model_policy":MODEL_POLICY,"reference_policy":REFERENCE_POLICY,
-        "policy_version":POLICY_VERSION,"validation_status":VALIDATION_STATUS,"manual_only":True,
+        "quote_provenance":KALSHI_PROVIDER,"model_policy":MODEL_POLICY,
+        "reference_policy":V22_REFERENCE_POLICY if policy.tiered_reference_risk else REFERENCE_POLICY,
+        "policy_version":policy.version,"validation_status":VALIDATION_STATUS,"manual_only":True,
         "production_validated":False,"authentication":"NONE","order_capability":"DISABLED",
         "status":"NO SIGNAL","reason":"UNASSESSED","economically_valid":False,"reference_risk":"REFERENCE_UNKNOWN",
         "fee_type":fee_metadata.fee_type,"fee_multiplier":str(fee_metadata.fee_multiplier),
@@ -193,14 +242,25 @@ def evaluate_candidate(*, snapshot, mapping, quote, quote_status: str,
             no_ask_size=str(quote.no_ask_size) if quote.no_ask_size is not None else None,
             quote_received_at_utc=quote.received_at_utc.isoformat(),
             quote_age_seconds=str(quote.quote_age_seconds),quote_verified=quote.quote_verified)
-    if not v2_quality_qualified(snapshot):
-        candidate.update(status="CONF FAIL",reason="TRANSFERRED QUALITY GATES NOT SATISFIED"); return candidate
+    candidate["blocking_gates"]=quality_gate_failures(snapshot,policy)
+    if candidate["blocking_gates"]:
+        candidate.update(status="CONF FAIL",reason="QUALITY GATES NOT SATISFIED"); return candidate
     risk=assess_reference_risk(asset=asset,target=mapping.target,proxy_current=_decimal(snapshot.current_price),
                                uncertainty_bound_bps=dev_p95_bps)
-    candidate.update(reference_risk=risk.classification,distance_bps=str(risk.distance_bps) if risk.distance_bps is not None else None,
-                     reference_bound_bps=str(dev_p95_bps) if dev_p95_bps is not None else None)
-    if risk.classification!="REFERENCE_ROBUST":
-        candidate.update(status="REF AMBIGUOUS",reason="REFERENCE AMBIGUOUS UNDER DEV_P95"); return candidate
+    reference_tier=risk.classification
+    if policy.tiered_reference_risk and risk.classification!="REFERENCE_ROBUST":
+        caution=assess_reference_risk(asset=asset,target=mapping.target,
+            proxy_current=_decimal(snapshot.current_price),uncertainty_bound_bps=dev_p50_bps)
+        reference_tier="REFERENCE_CAUTION" if caution.classification=="REFERENCE_ROBUST" else "REFERENCE_AMBIGUOUS"
+    candidate.update(reference_risk=reference_tier,reference_tier=reference_tier,
+        distance_bps=str(risk.distance_bps) if risk.distance_bps is not None else None,
+        reference_bound_bps=str(dev_p95_bps) if dev_p95_bps is not None else None,
+        reference_caution_bound_bps=str(dev_p50_bps) if dev_p50_bps is not None else None)
+    if reference_tier not in {"REFERENCE_ROBUST","REFERENCE_CAUTION"}:
+        candidate["blocking_gates"].append({"gate":"REFERENCE RISK","value":reference_tier,
+            "operator":"OUTSIDE","threshold":str(dev_p50_bps) if policy.tiered_reference_risk else str(dev_p95_bps)})
+        reason="REFERENCE AMBIGUOUS INSIDE DEVELOPMENT P50" if policy.tiered_reference_risk else "REFERENCE AMBIGUOUS UNDER DEV_P95"
+        candidate.update(status="REF AMBIGUOUS",reason=reason); return candidate
     if quote_status=="QUOTE_STALE": candidate.update(status="QUOTE STALE",reason="KALSHI QUOTE STALE"); return candidate
     if quote is None or not quote.quote_verified:
         candidate.update(status="QUOTE UNAVAILABLE",reason="VERIFIED KALSHI QUOTE UNAVAILABLE"); return candidate
@@ -228,20 +288,24 @@ def evaluate_candidate(*, snapshot, mapping, quote, quote_status: str,
         gross_ev=str(gross_ev),net_ev=str(net_ev),conservative_net_ev=str(conservative_net_ev),
         net_break_even=str(net_break_even),model_edge=str(model_edge),conservative_edge=str(conservative_edge),
         economic_guard=ECONOMIC_GUARD_VERSION,max_total_entry_cost=str(MAX_TOTAL_ENTRY_COST),
-        min_conservative_edge=str(MIN_CONSERVATIVE_EDGE))
+        min_conservative_edge=str(policy.min_conservative_edge))
     if ask+fee.total_fee>=payout:
         candidate.update(status="ECON FAIL",reason="ECONOMICALLY IMPOSSIBLE"); return candidate
     if fee.total_cost>=MAX_TOTAL_ENTRY_COST:
         candidate.update(status="EXPENSIVE CONTRACT",reason="TOTAL COST AT OR ABOVE $0.95 OPERATOR LIMIT"); return candidate
     if net_ev<=0 or conservative_net_ev<=0:
         candidate.update(status="ECON FAIL",reason="POSITIVE POINT AND CONSERVATIVE EV REQUIRED"); return candidate
-    if conservative_edge<MIN_CONSERVATIVE_EDGE:
-        candidate.update(status="ECON FAIL",reason="CONSERVATIVE EDGE BELOW 2 PP OPERATOR MINIMUM"); return candidate
-    candidate.update(status="ELIGIBLE",reason="ALL EXPERIMENTAL GATES PASSED",economically_valid=True)
+    if conservative_edge<policy.min_conservative_edge:
+        candidate["blocking_gates"].append({"gate":"CONSERVATIVE EDGE","value":float(conservative_edge),
+            "operator":">=","threshold":float(policy.min_conservative_edge)})
+        candidate.update(status="ECON FAIL",reason="CONSERVATIVE EDGE BELOW OPERATOR MINIMUM"); return candidate
+    candidate.update(status="ELIGIBLE",reason="ALL EXPERIMENTAL GATES PASSED",economically_valid=True,
+        reference_warning=("REFERENCE CAUTION — PROXY/SETTLEMENT BASIS RISK"
+                           if reference_tier=="REFERENCE_CAUTION" else None))
     return candidate
 
 
-def select_primary_signal(candidates: list[dict]) -> dict:
+def select_primary_signal(candidates: list[dict], policy: ManualSignalPolicy = V2_POLICY) -> dict:
     fixed={row.get("asset"):dict(row) for row in candidates}
     if set(fixed)!=set(ASSETS): raise ValueError("exact four-asset candidate universe required")
     rows=[fixed[a] for a in ASSETS]; eligible=[r for r in rows if r.get("status")=="ELIGIBLE" and r.get("economically_valid")]
@@ -260,20 +324,21 @@ def select_primary_signal(candidates: list[dict]) -> dict:
     headline="PRIMARY SIGNAL" if selected else ("SCANNING" if waiting else "NO SIGNAL")
     operator={"mode":"KALSHI_MANUAL_SIGNAL","headline":headline,
         "reason":reason,"primary_selection":selected,"strongest_candidate":strongest,
-        "candidate_rankings":ordered,"selection_policy_version":POLICY_VERSION,
-        "policy":POLICY_VERSION,"actionability":ACTIONABILITY,"reference_policy":REFERENCE_POLICY,
+        "candidate_rankings":ordered,"selection_policy_version":policy.version,
+        "policy":policy.version,"actionability":ACTIONABILITY,"reference_policy":REFERENCE_POLICY,
         "validation_status":VALIDATION_STATUS,"manual_only":True,"production_validated":False,
         "manual_execution_only":True,"authentication":"NONE","order_capability":"DISABLED",
         "event_market_provider":KALSHI_PROVIDER,"seconds_until_entry_eligible":None,
         "current_window":strongest.get("contract_id"),"first_scan_complete":True}
-    return {"selection_policy":POLICY_VERSION,"status":operator["headline"],"selected":selected,
+    return {"selection_policy":policy.version,"status":operator["headline"],"selected":selected,
         "strongest_candidate":strongest,"candidates":ordered,"operator_state":operator}
 
 
 class ManualSignalStore:
     """Append-only signal-only ledger; never records an operator trade."""
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, policy_version: str = POLICY_VERSION):
         self.root=Path(root).resolve(); self.root.mkdir(parents=True,exist_ok=True)
+        self.policy_version=policy_version
         self.path=self.root/"signals.jsonl"; self._lock=threading.Lock(); self._ids=set(); self._latest_record=None
         if self.path.exists():
             for line in self.path.read_text(encoding="utf-8").splitlines():
@@ -285,15 +350,20 @@ class ManualSignalStore:
                 self._ids=set(recent)
 
     @staticmethod
-    def signal_id(signal: dict) -> str:
-        return hashlib.sha256(f"{POLICY_VERSION}|{signal['contract_id']}|{signal['side']}".encode()).hexdigest()
+    def _signal_id(policy_version: str, signal: dict) -> str:
+        return hashlib.sha256(f"{policy_version}|{signal['contract_id']}|{signal['side']}".encode()).hexdigest()
+
+    def signal_id(self, signal: dict) -> str:
+        return self._signal_id(self.policy_version,signal)
 
     def append(self, signal: dict, observed_at: datetime) -> bool:
         if signal.get("status") not in {"PRIMARY","LOCKED"} or not signal.get("economically_valid") or signal.get("signal_lock") is not True:
             raise ValueError("only valid experimental primary signals may be persisted")
         identifier=self.signal_id(signal)
         record={"schema_version":"KALSHI_MANUAL_SIGNAL_V2","signal_id":identifier,
-            "policy_version":POLICY_VERSION,"reference_policy":REFERENCE_POLICY,"model_policy":MODEL_POLICY,
+            "policy_version":self.policy_version,
+            "reference_policy":V22_REFERENCE_POLICY if self.policy_version==V22_POLICY_VERSION else REFERENCE_POLICY,
+            "model_policy":MODEL_POLICY,
             "observed_at_utc":observed_at.astimezone(UTC).isoformat(),"issued_at_utc":observed_at.astimezone(UTC).isoformat(),
             "seconds_remaining_at_issue":signal.get("seconds_remaining"),"signal_lock_window":signal.get("window_end_utc"),
             "signal_lock":True,**signal,
@@ -309,18 +379,20 @@ class ManualSignalStore:
 
     def locked_for_window(self, window_end_utc: str) -> dict | None:
         record=self._latest_record
-        if record and record.get("signal_lock") is True and record.get("window_end_utc")==window_end_utc:
+        if (record and record.get("policy_version")==self.policy_version and
+            record.get("signal_lock") is True and record.get("window_end_utc")==window_end_utc):
             return dict(record)
         return None
 
 
-def apply_signal_lock(selection: dict, locked: dict | None, observed_at: datetime) -> tuple[dict, dict | None]:
+def apply_signal_lock(selection: dict, locked: dict | None, observed_at: datetime,
+                      policy: ManualSignalPolicy = V2_POLICY) -> tuple[dict, dict | None]:
     """Freeze the first issued asset/side for a window; later scans are informational."""
     selected=selection.get("selected")
     if locked is None and selected:
         locked=dict(selected); locked.update(issued_at_utc=observed_at.astimezone(UTC).isoformat(),
             seconds_remaining_at_issue=selected.get("seconds_remaining"),signal_lock_window=selected.get("window_end_utc"),
-            signal_lock=True,policy_version=POLICY_VERSION)
+            signal_lock=True,policy_version=policy.version)
     if locked is None:return selection,None
     current=next((r for r in selection["candidates"] if r.get("asset")==locked.get("asset")),None) or {}
     if current.get("side")!=locked.get("side"): current_status="CONFIDENCE WEAKENED"

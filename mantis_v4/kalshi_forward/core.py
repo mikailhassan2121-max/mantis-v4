@@ -75,6 +75,18 @@ class ShadowStore:
         self.recent_id_limit = int(recent_id_limit) if recent_id_limit else None
         self._ids = {name: {row.get(key) for row in self.read(name, limit=self.recent_id_limit) if row.get(key)}
                      for name, key in STREAM_KEYS.items()}
+        self._counts={name:0 for name in STREAM_KEYS}; self._last={name:None for name in STREAM_KEYS}; self._eligible=0
+        for name in STREAM_KEYS:
+            path=self.path(name)
+            if not path.exists(): continue
+            with path.open("r",encoding="utf-8") as handle:
+                for line in handle:
+                    if not line.strip(): continue
+                    try: row=json.loads(line)
+                    except json.JSONDecodeError: continue
+                    if isinstance(row,dict):
+                        self._counts[name]+=1; self._last[name]=row
+                        if name=="shadow_candidates" and row.get("original_model_qualified"): self._eligible+=1
 
     def path(self, stream: str) -> Path:
         if stream not in STREAM_KEYS: raise ValueError(f"unknown shadow stream {stream}")
@@ -85,16 +97,22 @@ class ShadowStore:
         if not path.exists(): return []
         rows = [] if not limit else deque(maxlen=int(limit))
         with path.open("r", encoding="utf-8") as handle:
-            lines=handle.readlines()
-            for line_number, line in enumerate(lines, 1):
+            pending=None; line_number=0
+            for current in handle:
+                if pending is None: pending=current; continue
+                line_number+=1; line=pending; pending=current
                 if not line.strip(): continue
                 try: row = json.loads(line)
                 except json.JSONDecodeError:
-                    # Crash recovery tolerates only a partial final line.
-                    if line_number == len(lines): break
                     raise ValueError(f"malformed {stream}.jsonl line {line_number}")
                 if not isinstance(row, dict): raise ValueError(f"non-object {stream} record")
                 rows.append(row)
+            if pending and pending.strip():
+                try: row=json.loads(pending)
+                except json.JSONDecodeError: row=None  # tolerate only a partial final line
+                if row is not None:
+                    if not isinstance(row,dict): raise ValueError(f"non-object {stream} final record")
+                    rows.append(row)
         return list(rows)
 
     def append(self, stream: str, record: dict) -> bool:
@@ -107,9 +125,25 @@ class ShadowStore:
                 handle.write(json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n")
                 handle.flush(); os.fsync(handle.fileno())
             self._ids[stream].add(identifier)
+            self._counts[stream]+=1; self._last[stream]=payload
+            if stream=="shadow_candidates" and payload.get("original_model_qualified"): self._eligible+=1
             if self.recent_id_limit and len(self._ids[stream]) > self.recent_id_limit:
                 self._ids[stream] = {row.get(key) for row in self.read(stream, limit=self.recent_id_limit) if row.get(key)}
             return True
+
+    def summary(self) -> dict:
+        """Constant-memory live counters for the read-only command center."""
+        unresolved=max(0,self._counts["shadow_candidates"]-self._counts["resolutions"])
+        latest=self._last.get("observations") or {}
+        resolution=self._last.get("resolutions") or {}
+        return {"mode":"FORWARD_SHADOW_ONLY","policy":REFERENCE_POLICY,
+            "sample_label":SAMPLE_LABEL,"observations":self._counts["observations"],
+            "resolutions":self._counts["resolutions"],"eligible":self._eligible,
+            "shadow_candidates":self._counts["shadow_candidates"],"unresolved":unresolved,
+            "last_observation_utc":latest.get("observed_at_utc"),
+            "last_resolved_window":resolution.get("window_end_utc"),
+            "provider_health_records":self._counts["provider_health"],
+            "data_directory":str(self.root),"status":"EXPERIMENTAL_NOT_YET_FORWARD_VALIDATED"}
 
 
 def common_envelope(*, run_id: str, contract_id: str, asset: str, mapping,

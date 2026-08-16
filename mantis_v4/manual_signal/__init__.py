@@ -3,6 +3,10 @@
 from .core import (
     ACTIONABILITY,
     POLICY_VERSION,
+    V21_POLICY_VERSION,
+    V21_POLICY,
+    V22_POLICY_VERSION,
+    V22_POLICY,
     FeeMetadata,
     KalshiFeeModel,
     ManualSignalStore,
@@ -12,6 +16,6 @@ from .core import (
 )
 
 __all__ = [
-    "ACTIONABILITY", "POLICY_VERSION", "FeeMetadata", "KalshiFeeModel",
+    "ACTIONABILITY", "POLICY_VERSION", "V21_POLICY_VERSION", "V21_POLICY", "V22_POLICY_VERSION", "V22_POLICY", "FeeMetadata", "KalshiFeeModel",
     "ManualSignalStore", "initial_manual_selection", "evaluate_candidate", "select_primary_signal",
 ]

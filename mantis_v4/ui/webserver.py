@@ -323,7 +323,7 @@ def _make_handler(server: CommandCenterServer):
                     self._send(b"forbidden", "text/plain; charset=utf-8", status=403)
                     return
                 allowed = ("mode", "headline", "reason", "sequence", "source", "asset",
-                           "market", "countdown", "candidate_rows")
+                           "market", "countdown", "candidate_rows","view","row_count","text")
                 server.frontend_rendered = {key: query.get(key, [""])[0] for key in allowed}
                 self._send(b"recorded", "text/plain; charset=utf-8")
                 return

@@ -507,6 +507,7 @@ body:not(.operational-ready) .module { transition:none; }
     flex-direction: column;
 }
 .view.active { opacity: 1; pointer-events: auto; }
+#view_surveillance, #view_forward, #view_diagnostics { overflow-y: auto; }
 
 /* ---------------------------------------------------- active contract view */
 

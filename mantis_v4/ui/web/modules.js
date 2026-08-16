@@ -288,7 +288,8 @@
             { k: "CONSERVATIVE PROB", v: F.pct(summary.conservative_probability) },
             { k: "KALSHI TARGET", v: F.has(summary.target) ? F.price(summary.target) : DASH },
             { k: "PROXY CURRENT", v: F.has(summary.proxy_current) ? F.price(summary.proxy_current) : DASH },
-            { k: "REFERENCE RISK", v: F.words(summary.reference_risk || "REFERENCE UNKNOWN") + " / DEV_P95" },
+            { k: "REFERENCE RISK", v: F.words(summary.reference_risk || "REFERENCE UNKNOWN") +
+                (summary.reference_risk === "REFERENCE_CAUTION" ? " / DEVELOPMENT P50-P95 TIER" : " / DEV_P95") },
             { k: "STATUS", v: status, cls: status === "PRIMARY" ? "ok" : "warnc" },
             { k: "MARKET", v: market },
             { k: "EVENT MARKET SOURCE", v: operator.event_market_provider || "KALSHI_PUBLIC_REST" },
@@ -303,6 +304,8 @@
                 { k: "TOTAL COST / CONS EDGE", v: (F.has(summary.total_cost) ? F.money(summary.total_cost) : DASH) + " / " + (F.has(summary.conservative_edge) ? F.pct(summary.conservative_edge, 1) : DASH) },
                 { k: "CURRENT STATE", v: summary.current_status || operator.reason, cls: summary.current_status === "STILL QUALIFIES" ? "ok" : "warnc" },
                 { k: "EXIT MODEL", v: "NO EXIT SIGNAL GENERATED", cls: "warnc" });
+            if (summary.reference_risk === "REFERENCE_CAUTION") summaryRows.splice(1,0,
+                { k: "REFERENCE CAUTION", v: "PROXY/SETTLEMENT BASIS RISK", cls: "warnc" });
         }
         if (eligibilitySeconds > 0) summaryRows.splice(1, 0,
             { k: "ENTRY ELIGIBLE IN", v: F.countdown(eligibilitySeconds), cls: "warnc" });
@@ -510,8 +513,43 @@
 
     /* ------------------------------------------------------ other views */
 
+    function tabRendered(snap, view, target, rowsCount) {
+        global.dispatchEvent(new CustomEvent("mantis:tab-rendered",{detail:{
+            view:view,sequence:snap.sequence,row_count:rowsCount,
+            text:(target.textContent||"").replace(/\s+/g," ").trim().slice(0,500)
+        }}));
+    }
+
     function renderSurveillance(snap) {
         var list = [];
+        var operator = snap.operator_state || {};
+        if (operator.mode === "KALSHI_MANUAL_SIGNAL") {
+            (operator.candidate_rankings || []).forEach(function (c) {
+                var blockers=(c.blocking_gates || []).map(function (g) {
+                    var pct=/CONFIDENCE|CONSERVATIVE|DISAGREEMENT|PROBABILITY|EDGE/.test(g.gate);
+                    var value=pct ? F.pct(g.value,1) : F.num(g.value,2);
+                    var threshold=pct ? F.pct(g.threshold,1) : F.num(g.threshold,2);
+                    return g.gate + " " + value + " " + g.operator + " " + threshold + " FAIL";
+                });
+                if (!blockers.length && c.reason && c.status !== "PRIMARY" && c.status !== "LOCKED SIGNAL") blockers=[c.reason];
+                list.push({k:String(c.asset || "").replace("-USD", ""),
+                    v:(c.side || DASH) + "  " + F.pct(c.confidence),
+                    cls:c.status === "PRIMARY" || c.status === "LOCKED SIGNAL" ? "ok" : "warnc"});
+                list.push({k:"MODEL / CONSERVATIVE",sub:true,v:F.pct(c.confidence)+" / "+F.pct(c.conservative_probability)});
+                list.push({k:"FRAG / DISAG / CROSS",sub:true,v:F.num(c.fragility,1)+" / "+F.num(c.disagreement,4)+" / "+F.pct(c.crossing_probability)});
+                list.push({k:"CROSSINGS / TARGET",sub:true,v:(F.has(c.crossings)?c.crossings:DASH)+" / "+(F.has(c.target)?F.price(c.target):DASH)});
+                list.push({k:"PROXY / DISTANCE",sub:true,v:(F.has(c.proxy_current)?F.price(c.proxy_current):DASH)+" / "+(F.has(c.distance_bps)?F.num(c.distance_bps,2," bp"):DASH)});
+                list.push({k:"REFERENCE / YES / NO ASK",sub:true,v:F.words(c.reference_risk||"REFERENCE UNKNOWN")+" / "+(F.has(c.yes_ask)?F.money(c.yes_ask):DASH)+" / "+(F.has(c.no_ask)?F.money(c.no_ask):DASH)});
+                list.push({k:"TOTAL COST / CONS EDGE",sub:true,v:(F.has(c.total_cost)?F.money(c.total_cost):DASH)+" / "+(F.has(c.conservative_edge)?F.pct(c.conservative_edge,1):DASH)});
+                list.push({k:"QUOTE AGE / STATUS",sub:true,v:(F.has(c.quote_age_seconds)?F.num(c.quote_age_seconds,2," s"):DASH)+" / "+(c.status||"NO SIGNAL")});
+                list.push({k:"BLOCKING GATES",sub:true,v:blockers.join("; ") || "NONE"});
+                list.push(null);
+            });
+            var closest=operator.strongest_candidate || {};
+            list.unshift({k:"CLOSEST CANDIDATE",v:closest.asset ? closest.asset.replace("-USD","")+" "+(closest.side||DASH) : DASH,cls:"warnc"},null);
+            var manualTarget=document.getElementById("surv_rows"); rows(manualTarget,list);
+            tabRendered(snap,"surveillance",manualTarget,(operator.candidate_rankings||[]).length); return;
+        }
         (snap.assets || []).forEach(function (v) {
             var bufferPct = (F.has(v.buffer) && v.reference) ? v.buffer / v.reference : null;
             list.push({ k: v.asset + (v.asset === snap.focus ? "  ◆" : ""),
@@ -526,10 +564,30 @@
             list.push({ k: "REASON", sub: true, v: v.final_reason_text || DASH });
             list.push(null);
         });
-        rows(document.getElementById("surv_rows"), list);
+        var target=document.getElementById("surv_rows"); rows(target, list); tabRendered(snap,"surveillance",target,(snap.assets||[]).length);
     }
 
     function renderForwardView(snap) {
+        var operator=snap.operator_state || {}, shadow=operator.forward_shadow_summary;
+        if (operator.mode === "KALSHI_MANUAL_SIGNAL" && shadow) {
+            var milestones=[50,250,500,1000], resolved=Number(shadow.resolutions||0), list=[
+                {k:"FORWARD MODE",v:"SHADOW ONLY",cls:"warnc"},
+                {k:"CURRENT POLICY",v:shadow.policy||DASH},
+                {k:"VALIDATION",v:"EXPERIMENTAL â€” NOT YET FORWARD VALIDATED",cls:"warnc"},null,
+                {k:"TOTAL OBSERVATIONS",v:String(shadow.observations||0)},
+                {k:"TOTAL RESOLUTIONS",v:String(resolved)},
+                {k:"TOTAL ELIGIBLE",v:String(shadow.eligible||0)},
+                {k:"TOTAL SHADOW CANDIDATES",v:String(shadow.shadow_candidates||0)},
+                {k:"UNRESOLVED",v:String(shadow.unresolved||0)},null];
+            (operator.candidate_rankings||[]).forEach(function(c){list.push({k:String(c.asset||"").replace("-USD",""),v:c.status||"SCANNING"});});
+            list.push(null,{k:"FORWARD MILESTONES",v:milestones.map(function(m){return m+" ["+Math.min(100,resolved/m*100).toFixed(0)+"%]";}).join("  ")},
+                {k:"LAST OBSERVATION UTC",v:shadow.last_observation_utc||DASH},
+                {k:"LAST RESOLVED WINDOW",v:shadow.last_resolved_window||DASH},
+                {k:"PROVIDER HEALTH",v:String(shadow.provider_health_records||0)+" records"},
+                {k:"DATA DIRECTORY / STATUS",v:(shadow.data_directory||DASH)+" / READY"});
+            var manualTarget=document.getElementById("fwd_rows"); rows(manualTarget,list);
+            tabRendered(snap,"forward",manualTarget,Number(shadow.observations||0)); return;
+        }
         var f = snap.forward, h = snap.historical;
         var list = [{ k: "FORWARD OBSERVATION SAMPLE", v: "LIVE — NOT A BACKTEST" }, null];
         if (!f) {
@@ -561,10 +619,46 @@
         }
         list.push(null);
         list.push({ k: "SAMPLES ARE NEVER COMBINED", v: "" });
-        rows(document.getElementById("fwd_rows"), list);
+        var target=document.getElementById("fwd_rows"); rows(target,list); tabRendered(snap,"forward",target,f?Number(f.resolved_entries||0):0);
     }
 
     function renderDiagnostics(snap) {
+        var operator=snap.operator_state || {}, host=(snap.status||{}).host||{};
+        if (operator.mode === "KALSHI_MANUAL_SIGNAL") {
+            var frequency=operator.signal_frequency||{}, buffers=operator.buffer_counts||{}, sample=operator.policy_sample||{};
+            var v2sample=sample.v2||{},v21sample=sample.v21||{},v22sample=sample.v22||{};
+            rows(document.getElementById("diag_rows"),[
+                {k:"RUN ID",v:(snap.status||{}).run_id||DASH},{k:"POLICY VERSION",v:operator.policy||DASH},
+                {k:"FRONTEND BUILD",v:snap.frontend_build_id||DASH},{k:"GIT COMMIT",v:(snap.status||{}).git_commit||DASH},null,
+                {k:"PYTHON PID / UPTIME",v:(host.pid||DASH)+" / "+F.num(host.uptime_seconds,0," s")},
+                {k:"RSS / PEAK",v:F.num(host.rss_mb,1," MB")+" / "+F.num(host.rss_peak_mb,1," MB")},
+                {k:"MEMORY STATUS",v:host.memory_status||operator.memory_status||DASH,cls:(host.memory_status||operator.memory_status)==="NORMAL"?"ok":"warnc"},
+                {k:"THREADS / SSE CLIENTS",v:(host.threads||0)+" / "+(host.active_sse_clients||host.clients||0)},
+                {k:"SSE QUEUED FRAMES",v:String(((host.buffer_counts||{}).sse_queued_frames)||0)},null,
+                {k:"SCAN COUNT / ERRORS",v:(snap.status.scan_count||0)+" / "+(snap.status.error_count||0)},
+                {k:"LAST SCAN / LATENCY",v:(snap.status.last_scan_utc||DASH)+" / "+F.num(snap.status.latency_seconds,3," s")},
+                {k:"YAHOO STATUS",v:snap.status.underlying_state||DASH},{k:"KALSHI STATUS",v:snap.status.quote_status||DASH},
+                {k:"REFERENCE STATUS",v:snap.status.reference_status||DASH},{k:"FORWARD LOGGER",v:snap.status.forward_logger_status||DASH},
+                {k:"BUFFER COUNTS",v:Object.keys(buffers).map(function(k){return k+"="+buffers[k];}).join("  ")||DASH},
+                {k:"VOICE / AUDIO",v:(snap.status.voice_enabled?"ON":"OFF")+" / "+(snap.status.audio_enabled?"ON":"OFF")},
+                {k:"CURRENT WINDOW / LOCK",v:(operator.current_window||DASH)+" / "+(operator.signal_lock?"LOCKED":"OPEN")},
+                {k:"COMPLETED / SIGNAL WINDOWS",v:(frequency.completed_windows||0)+" / "+(frequency.windows_with_signal||0)},
+                {k:"SIGNAL RATE / TOP BLOCKER",v:(F.has(frequency.signal_rate)?F.pct(frequency.signal_rate,1):DASH)+" / "+(frequency.most_common_blocking_gate||DASH)},
+                null,{k:"POLICY SAMPLE",v:"DESCRIPTIVE FORWARD SAMPLE",cls:"warnc"},
+                {k:"VALIDATION STATUS",v:"NOT PERFORMANCE VALIDATION",cls:"warnc"},
+                {k:"COMPLETED WINDOWS",v:String(sample.completed_windows||0)},
+                {k:"V2 SIGNAL RATE",v:F.has(v2sample.signal_rate)?F.pct(v2sample.signal_rate,1):DASH},
+                {k:"V2.1 SIGNAL RATE",v:F.has(v21sample.signal_rate)?F.pct(v21sample.signal_rate,1):DASH},
+                {k:"V2.2 SIGNAL RATE",v:F.has(v22sample.signal_rate)?F.pct(v22sample.signal_rate,1):DASH},
+                {k:"V2 SIGNALS / NO SIGNALS",v:(v2sample.signals||0)+" / "+(v2sample.no_signals||0)},
+                {k:"V2.1 SIGNALS / NO SIGNALS",v:(v21sample.signals||0)+" / "+(v21sample.no_signals||0)},
+                {k:"V2.2 SIGNALS / NO SIGNALS",v:(v22sample.signals||0)+" / "+(v22sample.no_signals||0)},
+                {k:"TOP V2 BLOCKER",v:v2sample.top_blocker||DASH},
+                {k:"TOP V2.1 BLOCKER",v:v21sample.top_blocker||DASH},
+                {k:"TOP V2.2 BLOCKER",v:v22sample.top_blocker||DASH},
+                {k:"LAST ERROR",v:(snap.error&&snap.error.message)||"NONE"}
+            ]); tabRendered(snap,"diagnostics",document.getElementById("diag_rows"),Object.keys(buffers).length); return;
+        }
         var v = focused(snap) || {};
         var s = snap.status;
         rows(document.getElementById("diag_rows"), [
@@ -587,7 +681,7 @@
             { k: "POLICY", v: s.policy_name },
             { k: "CONFIG HASH", v: String(v.config_hash || s.config_hash || DASH).slice(0, 16) },
             { k: "GIT COMMIT", v: String(v.git_commit || s.git_commit || DASH).slice(0, 12) }
-        ]);
+        ]); tabRendered(snap,"diagnostics",document.getElementById("diag_rows"),1);
     }
 
     /* ---------------------------------------------------------- economics */
