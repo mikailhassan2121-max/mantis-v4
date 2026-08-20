@@ -190,7 +190,7 @@ def snapshot_payload(snapshot: UiSnapshot, config: Any,
     """The whole screen, as plain JSON-safe data."""
     now = now or datetime.now(UTC)
     developer_mode = bool(getattr(config, "developer_mode", False))
-    return {
+    payload = {
         "type": "snapshot",
         "server_time_utc": now.isoformat(),
         "focus": snapshot.focus,
@@ -207,3 +207,9 @@ def snapshot_payload(snapshot: UiSnapshot, config: Any,
         "branding": branding_payload(),
         "presentation": presentation_payload(config),
     }
+    # Optional read-only SVI extension point. Existing MANTIS snapshots remain
+    # byte-for-byte equivalent unless a supervisor payload is explicitly set.
+    svi = getattr(snapshot, "svi", None)
+    if svi is not None:
+        payload["svi"] = svi
+    return payload

@@ -305,6 +305,7 @@ class UiSnapshot:
     focus: Optional[str]
     primary_selection: Optional[dict] = None
     operator_state: Optional[dict] = None
+    svi: Optional[dict] = None
     demo_mode: bool = False
 
 
@@ -323,6 +324,7 @@ class CommandCenterState:
         self._last_error: Optional[SystemError] = None
         self._primary_selection: Optional[dict] = None
         self._operator_state: Optional[dict] = None
+        self._svi: Optional[dict] = None
 
     # -- writes (quant thread) ---------------------------------------------
 
@@ -433,6 +435,11 @@ class CommandCenterState:
                     op["persisted"]=bool(persisted)
                     self._operator_state=op
 
+    def set_svi(self, payload: Optional[dict]) -> None:
+        """Publish a read-only SVI supervisor payload for presentation."""
+        with self._lock:
+            self._svi = dict(payload) if payload else None
+
     def operator_state(self) -> Optional[dict]:
         with self._lock:
             return dict(self._operator_state) if self._operator_state else None
@@ -485,6 +492,7 @@ class CommandCenterState:
                 focus=self.focus_asset(),
                 primary_selection=dict(self._primary_selection) if self._primary_selection else None,
                 operator_state=dict(self._operator_state) if self._operator_state else None,
+                svi=dict(self._svi) if self._svi else None,
                 demo_mode=self._status.demo_mode,
             )
 

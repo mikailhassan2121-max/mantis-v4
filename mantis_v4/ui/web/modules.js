@@ -570,7 +570,19 @@
     function renderForwardView(snap) {
         var operator=snap.operator_state || {}, shadow=operator.forward_shadow_summary;
         if (operator.mode === "KALSHI_MANUAL_SIGNAL" && shadow) {
+            var svi=snap.svi||{}, evidence=svi.evidence||{}, groups=evidence.groups||[];
+            var registry=svi.registry||{}, consensus=svi.consensus||[];
+            var benchmarks=svi.benchmarks||[], shadows=svi.shadows||[];
+            var comparisons=evidence.benchmark_comparisons||[];
             var milestones=[50,250,500,1000], resolved=Number(shadow.resolutions||0), list=[
+                {k:"SAAF VENTURES INTELLIGENCE",v:"RESOLVED EVIDENCE / READ ONLY",cls:"warnc"},
+                {k:"SVI EXECUTION MODE",v:svi.execution_mode||"MANUAL_ONLY"},
+                {k:"SPECIALIST REGISTRY",v:(registry.registry_version||"SVI_AGENT_REGISTRY_V2")+" / "+String(registry.specialist_count||0)+" AGENT(S)"},
+                {k:"RESOLUTION REQUIREMENT",v:evidence.resolution_requirement||"OFFICIAL_VERIFIED_ONLY"},
+                {k:"SVI EVIDENCE HEALTH",v:evidence.audit_status||"AWAITING AUDIT",cls:evidence.audit_status==="PASS"?"ok":"warnc"},
+                {k:"EVIDENCE MANIFEST",v:evidence.manifest_version||"SVI_EVIDENCE_MANIFEST_V1"},
+                {k:"RESOLVED / UNRESOLVED FORECASTS",v:String(evidence.resolved_forecasts||0)+" / "+String(evidence.unresolved_forecasts||0)},
+                {k:"MODEL ACTIVATION",v:evidence.model_activation===false?"DISABLED":"UNAVAILABLE",cls:"warnc"},null,
                 {k:"FORWARD MODE",v:"SHADOW ONLY",cls:"warnc"},
                 {k:"CURRENT POLICY",v:shadow.policy||DASH},
                 {k:"VALIDATION",v:"EXPERIMENTAL â€” NOT YET FORWARD VALIDATED",cls:"warnc"},null,
@@ -579,6 +591,33 @@
                 {k:"TOTAL ELIGIBLE",v:String(shadow.eligible||0)},
                 {k:"TOTAL SHADOW CANDIDATES",v:String(shadow.shadow_candidates||0)},
                 {k:"UNRESOLVED",v:String(shadow.unresolved||0)},null];
+            consensus.forEach(function(c){
+                list.push({k:"CONSENSUS "+String(c.instrument||"UNKNOWN").replace("-USD",""),v:(c.status||"NO REVIEWABLE SIGNAL")+" / "+(c.side||"ABSTAIN"),cls:c.status==="ABSTAIN_DISAGREEMENT"?"warnc":""});
+                list.push({k:"P(YES) / CONTRIBUTORS / GROUPS",sub:true,v:F.pct(c.probability_yes)+" / "+String(c.contributor_count||0)+" / "+String(c.independent_group_count||0)});
+                list.push({k:"DISPERSION / ACTIONABLE",sub:true,v:F.pct(c.dispersion)+" / NO"});
+            });
+            if(consensus.length) list.push(null);
+            benchmarks.forEach(function(b){
+                list.push({k:"BENCHMARK "+String(b.instrument||"UNKNOWN").replace("-USD",""),v:(b.agent||"MARKET")+" / "+F.pct(b.probability_yes),cls:"warnc"});
+                list.push({k:"ROLE / ACTIONABLE",sub:true,v:"MARKET-IMPLIED BENCHMARK / NO"});
+            });
+            if(benchmarks.length) list.push(null);
+            shadows.forEach(function(s){
+                list.push({k:"SHADOW "+String(s.instrument||"UNKNOWN").replace("-USD",""),v:(s.agent||"SPECIALIST")+" / EVIDENCE ONLY",cls:"warnc"});
+                list.push({k:"ROLE / PROMOTION",sub:true,v:"SHADOW / HUMAN REVIEW REQUIRED"});
+            });
+            if(shadows.length) list.push(null);
+            comparisons.forEach(function(c){
+                list.push({k:"MODEL VS MARKET "+(c.agent||"AGENT"),v:(c.status||"INSUFFICIENT_EVIDENCE")+" / n="+String(c.overlap||0),cls:"warnc"});
+                list.push({k:"BRIER / LOG-LOSS IMPROVEMENT",sub:true,v:F.num(c.brier_improvement,4)+" / "+F.num(c.log_loss_improvement,4)});
+            });
+            if(comparisons.length) list.push(null);
+            groups.forEach(function(g){
+                list.push({k:"CALIBRATION "+(g.agent||"AGENT"),v:(g.policy_version||DASH)+" / "+(g.status||"INSUFFICIENT_EVIDENCE"),cls:"warnc"});
+                list.push({k:"N / BRIER / LOG LOSS",sub:true,v:String(g.sample_size||0)+" / "+F.num(g.brier_score,4)+" / "+F.num(g.log_loss,4)});
+                list.push({k:"EXPECTED CALIBRATION ERROR",sub:true,v:F.num(g.expected_calibration_error,4)});
+            });
+            if(groups.length) list.push(null);
             (operator.candidate_rankings||[]).forEach(function(c){list.push({k:String(c.asset||"").replace("-USD",""),v:c.status||"SCANNING"});});
             list.push(null,{k:"FORWARD MILESTONES",v:milestones.map(function(m){return m+" ["+Math.min(100,resolved/m*100).toFixed(0)+"%]";}).join("  ")},
                 {k:"LAST OBSERVATION UTC",v:shadow.last_observation_utc||DASH},

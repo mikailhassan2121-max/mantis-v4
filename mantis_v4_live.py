@@ -99,6 +99,9 @@ def build_parser():
  modes.add_argument("--forward-report",action="store_true",help="print the read-only Phase 11 forward report and exit")
  modes.add_argument("--daily-report",nargs="?",const="TODAY",metavar="YYYY-MM-DD",help="print a UTC daily forward summary and exit")
  modes.add_argument("--forward-manifest",action="store_true",help="print forward dataset counts, schemas and hashes")
+ modes.add_argument("--svi-report",action="store_true",help="print the read-only SVI operational evidence report")
+ modes.add_argument("--svi-audit",action="store_true",help="audit SVI evidence identity and integrity")
+ modes.add_argument("--svi-manifest",action="store_true",help="print SVI evidence counts, schemas and hashes")
  modes.add_argument("--audit-contract",metavar="CONTRACT_ID",help="print one contract's immutable timeline")
  modes.add_argument("--incorrect-report",action="store_true",help="print incorrect entry-time classifications and exit")
  return ap
@@ -249,6 +252,15 @@ def main():
   if args.kalshi_forward_report:
    print(json.dumps(shadow_report(ShadowStore(shadow_path)),indent=2,sort_keys=True)); return 0
   result=audit_store(ShadowStore(shadow_path)); print(render_audit(result)); return 0 if result["status"]=="PASS" else 1
+ if args.svi_report or args.svi_audit or args.svi_manifest:
+  from saaf_ventures_intelligence.operations import audit_evidence,evidence_manifest,operational_report
+  shadow_path=_scoped_path(root,args.kalshi_shadow_dir,"Kalshi shadow directory")
+  signal_path=_scoped_path(root,args.kalshi_manual_signal_dir,"Kalshi manual signal directory")
+  evidence_path=signal_path/"svi"/"events.jsonl"; resolution_path=shadow_path/"resolutions.jsonl"
+  if args.svi_report: value=operational_report(evidence_path,resolution_path)
+  elif args.svi_manifest: value=evidence_manifest(evidence_path,resolution_path)
+  else: value=audit_evidence(evidence_path,resolution_path)
+  print(json.dumps(value,indent=2,sort_keys=True)); return 0 if value.get("status",value.get("audit",{}).get("status","PASS"))=="PASS" else 1
  forward_path=_scoped_path(root,args.forward_dir,"forward directory")
  manual_path=_scoped_path(root,args.manual_economics,"manual economics path")
  args.forward_dir=str(forward_path.relative_to(root))
@@ -486,6 +498,12 @@ def _run_kalshi_manual_signals(root,args,cfg,ui_config,diagnostic=False):
  from mantis_v4.manual_signal.live import ManualSignalEngine,render_manual_diagnostics
  from mantis_v4.ui import CommandCenter,CommandCenterState,build_audio,build_voice
  from mantis_v4.ui.voice import phrase_experimental_manual_signal
+ from saaf_ventures_intelligence.agents import KalshiMarketImpliedBenchmark,MantisAdapter
+ from saaf_ventures_intelligence.contracts import AgentContext
+ from saaf_ventures_intelligence.events import JsonlEventSink,NullEventSink
+ from saaf_ventures_intelligence.operations import operational_report
+ from saaf_ventures_intelligence.supervisors import MarketSupervisor
+ from saaf_ventures_intelligence.ui import publish_to_mantis
  shadow_path=_scoped_path(root,args.kalshi_shadow_dir,"Kalshi shadow directory")
  signal_path=_scoped_path(root,args.kalshi_manual_signal_dir,"Kalshi manual signal directory")
  state=CommandCenterState(cfg.active_assets,ui_config)
@@ -498,6 +516,17 @@ def _run_kalshi_manual_signals(root,args,cfg,ui_config,diagnostic=False):
   quote_status="STARTING",forward_logger_status="SHADOW")
  state.set_primary_selection(initial_manual_selection(V22_POLICY))
  engine=ManualSignalEngine(root=root,config=cfg,shadow_dir=shadow_path,signal_dir=signal_path)
+ try:
+  svi_events=NullEventSink() if diagnostic else JsonlEventSink(signal_path/"svi"/"events.jsonl")
+ except Exception as exc:
+  svi_events=NullEventSink()
+  state.log("WARNING","SVI","EVIDENCE UNAVAILABLE",f"{type(exc).__name__}: {exc}")
+ svi=MarketSupervisor((MantisAdapter(),KalshiMarketImpliedBenchmark()),events=svi_events)
+ svi_evidence_path=signal_path/"svi"/"events.jsonl"
+ svi_resolution_path=shadow_path/"resolutions.jsonl"
+ svi_evidence_report={"status":"REPORT_ONLY","resolution_requirement":"OFFICIAL_VERIFIED_ONLY",
+  "resolved_forecasts":0,"unresolved_forecasts":0,"groups":[],"model_activation":False}
+ svi_resolution_count=-1
  state.set_status(run_id=engine.run_id,git_commit=engine.git_commit)
  audio=build_audio(ui_config); voice=build_voice(ui_config)
  clock=Clock(); tz=load_timezone(cfg.contract_timezone); server=None; center=None
@@ -523,6 +552,19 @@ def _run_kalshi_manual_signals(root,args,cfg,ui_config,diagnostic=False):
     last_memory_status=engine.memory_status
    for snapshot in snapshots: state.update_from_snapshot(snapshot)
    state.set_primary_selection(selection,persisted=persisted)
+   try:
+    svi_result=svi.evaluate(AgentContext(instant.utc,"KALSHI","CRYPTO_EVENT_15M",
+     {"selection":selection,"contract_id":window.contract_id}))
+    resolution_count=int((selection.get("operator_state") or {}).get("forward_shadow_summary",{}).get("resolutions") or 0)
+    if not diagnostic and resolution_count!=svi_resolution_count:
+     svi_operations=operational_report(svi_evidence_path,svi_resolution_path)
+     svi_evidence_report=dict(svi_operations["evidence"])
+     svi_evidence_report["audit_status"]=svi_operations["audit"]["status"]
+     svi_evidence_report["manifest_version"]=svi_operations["manifest"]["manifest_version"]
+     svi_resolution_count=resolution_count
+    publish_to_mantis(state,svi_result,svi_evidence_report)
+   except Exception as exc:
+    state.log("WARNING","SVI","SUPERVISOR DEGRADED",f"{type(exc).__name__}: {exc}")
    if args.operator_diagnostics and not diagnostic:
     print("MANTIS_MANUAL_OPERATOR "+json.dumps(selection["operator_state"],default=str,sort_keys=True))
    state.record_scan(last_scan_utc=instant.utc,underlying_state="LIVE",

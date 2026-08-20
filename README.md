@@ -1,5 +1,49 @@
 # MANTIS 4.10.0
 
+MANTIS is also the first specialist integration for the Phase 1
+`saaf_ventures_intelligence` foundation. SVI consumes MANTIS's authoritative
+manual-signal output without changing its models, policy versions, memory,
+selection, persistence, or observation-only behavior. SVI adds typed advisory
+contracts, isolated specialist orchestration, append-only audit events,
+calibration scaffolding, review ranking, risk gates, and a read-only command
+center payload. It contains no authentication, sizing, order submission, or
+autonomous execution.
+
+The manual-signal runner now evaluates each completed selection through SVI,
+publishes the manual-only supervisor result to the existing read-only command
+center snapshot, and appends versioned evidence to
+`<manual-signal-dir>/svi/events.jsonl`. `EvidenceReplay` inspects this ledger;
+calibration reports remain report-only and never activate or tune a policy.
+
+Verified shadow resolutions are joined to SVI by the immutable asset-contract
+identifier. Reports use the latest pre-resolution forecast per
+agent/policy/contract, exclude proxy or mismatched resolutions, and surface
+grouped Brier, log-loss, and calibration-error evidence in the Forward view.
+
+Operational inspection is available through `--svi-report`, `--svi-audit`,
+and `--svi-manifest`. These commands are read-only, use the runner's scoped
+path protections, and report evidence hashes, schema/identity integrity,
+restart chronology, verified-resolution coverage, and manual-only status.
+
+Specialist lifecycle governance is fail-closed. New models may be registered
+with the `SHADOW` role to collect append-only resolved evidence, but shadow and
+benchmark outputs are excluded from opportunity rankings and consensus.
+`SVI_SPECIALIST_ADMISSION_V1` can only mark a sufficiently tested shadow
+specialist eligible for human review; it never promotes an agent automatically.
+Promotion requires an explicit registry/code change.
+
+SVI now has a versioned specialist registry and correlation-aware consensus
+diagnostics. Specialists sharing a correlation group are averaged before
+independent groups are combined, preventing duplicate-model confidence
+inflation. A lone MANTIS contribution is an exact pass-through; material
+cross-side disagreement produces an explicit non-actionable abstention.
+
+The first additional registered specialist is
+`KALSHI_MARKET_IMPLIED`, a benchmark-only agent computed from already-collected
+anonymous verified bid/ask midpoints. It is recorded and calibrated beside
+MANTIS but is excluded from opportunity ranking and consensus, providing a
+clean baseline for measuring whether MANTIS adds information beyond the market.
+
 **MANTIS** — Market Analysis and Neuro-Tactical Intraday Signal System.
 
 Research-grade 15-minute crypto event-contract probability, risk, and advisory engine for BTC, ETH, SOL, ADA, and XRP.

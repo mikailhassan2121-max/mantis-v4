@@ -81,6 +81,11 @@ def inspect(root: Path, forward_dir: Path, environ: dict | None = None) -> list[
                             sys.version.split()[0], True)]
     results.extend(_dependency_results())
     try:
+        importlib.import_module("saaf_ventures_intelligence.operations")
+        results.append(HealthResult("SVI FOUNDATION", "READY", "manual-only evidence operations", True))
+    except Exception as exc:
+        results.append(HealthResult("SVI FOUNDATION", "FAILED", f"{type(exc).__name__}: {exc}", True))
+    try:
         config = MantisConfig.load(environ=env)
         results.append(HealthResult("RUNTIME CONFIG", "READY", f"{len(config.active_assets)} assets", True))
         ZoneInfo(config.contract_timezone)
@@ -151,6 +156,22 @@ def self_test(root: Path) -> list[HealthResult]:
                                         "real forward directory untouched", True))
         except Exception as exc:
             results.append(HealthResult("TEMP PERSISTENCE", "FAILED", str(exc), True))
+        try:
+            from saaf_ventures_intelligence.events import AuditEvent, JsonlEventSink
+            from saaf_ventures_intelligence.operations import audit_evidence
+            from datetime import datetime, timezone
+            evidence = Path(temporary) / "svi" / "events.jsonl"
+            JsonlEventSink(evidence).append(AuditEvent("self-test", "SUPERVISOR_EVALUATION",
+                datetime(2000,1,1,tzinfo=timezone.utc), "self-test", {
+                    "execution_mode":"MANUAL_ONLY","candidates":[],
+                    "registry":{"registry_version":"SVI_AGENT_REGISTRY_V2",
+                    "specialist_count":1,"execution_mode":"MANUAL_ONLY","specialists":[]},
+                    "consensus":[]}))
+            audit = audit_evidence(evidence, Path(temporary) / "resolutions.jsonl")
+            results.append(HealthResult("SVI EVIDENCE", "READY" if audit["status"]=="PASS" else "FAILED",
+                                        "temporary append/audit only", True))
+        except Exception as exc:
+            results.append(HealthResult("SVI EVIDENCE", "FAILED", f"{type(exc).__name__}: {exc}", True))
         server = None
         try:
             from .ui import CommandCenterServer, CommandCenterState, PresentationConfig
