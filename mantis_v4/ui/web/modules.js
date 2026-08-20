@@ -574,6 +574,7 @@
             var registry=svi.registry||{}, consensus=svi.consensus||[];
             var benchmarks=svi.benchmarks||[], shadows=svi.shadows||[];
             var comparisons=evidence.benchmark_comparisons||[];
+            var governance=evidence.admission_governance||[], complementarity=evidence.complementarity||[];
             var milestones=[50,250,500,1000], resolved=Number(shadow.resolutions||0), list=[
                 {k:"SAAF VENTURES INTELLIGENCE",v:"RESOLVED EVIDENCE / READ ONLY",cls:"warnc"},
                 {k:"SVI EXECUTION MODE",v:svi.execution_mode||"MANUAL_ONLY"},
@@ -612,6 +613,15 @@
                 list.push({k:"BRIER / LOG-LOSS IMPROVEMENT",sub:true,v:F.num(c.brier_improvement,4)+" / "+F.num(c.log_loss_improvement,4)});
             });
             if(comparisons.length) list.push(null);
+            complementarity.forEach(function(c){
+                list.push({k:"COMPLEMENTARITY "+(c.agent||"SHADOW"),v:"MATCHED DIFFERENCE / n="+String(c.overlap||0),cls:"warnc"});
+                list.push({k:"MEAN ABSOLUTE P DIFFERENCE",sub:true,v:F.num(c.mean_absolute_probability_difference,4)});
+            });
+            governance.forEach(function(g){
+                list.push({k:"ADMISSION "+(g.agent||"SHADOW"),v:g.status||"NOT ELIGIBLE",cls:"warnc"});
+                list.push({k:"AUTOMATIC PROMOTION",sub:true,v:"DISABLED"});
+            });
+            if(complementarity.length||governance.length) list.push(null);
             groups.forEach(function(g){
                 list.push({k:"CALIBRATION "+(g.agent||"AGENT"),v:(g.policy_version||DASH)+" / "+(g.status||"INSUFFICIENT_EVIDENCE"),cls:"warnc"});
                 list.push({k:"N / BRIER / LOG LOSS",sub:true,v:String(g.sample_size||0)+" / "+F.num(g.brier_score,4)+" / "+F.num(g.log_loss,4)});

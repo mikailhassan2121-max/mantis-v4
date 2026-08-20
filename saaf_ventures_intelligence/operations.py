@@ -93,6 +93,12 @@ def audit_evidence(evidence_path: Path, resolution_path: Path) -> dict:
                 errors.append("FORBIDDEN_EXECUTION_FIELD")
             if row.get("schema_version") >= 4 and candidate.get("role") not in {"ADVISORY", "BENCHMARK", "SHADOW"}:
                 errors.append("INVALID_CANDIDATE_ROLE")
+            if row.get("schema_version") >= 5 and candidate.get("role") == "SHADOW":
+                if candidate.get("rank") is not None or candidate.get("risk_disposition") != "SHADOW_ONLY":
+                    errors.append("SHADOW_MUST_BE_UNRANKED")
+            if row.get("schema_version") >= 5 and candidate.get("role") == "BENCHMARK":
+                if candidate.get("rank") is not None or candidate.get("risk_disposition") != "BENCHMARK_ONLY":
+                    errors.append("BENCHMARK_MUST_BE_UNRANKED")
     try:
         resolved = resolved_evidence_report(evidence_path, resolution_path)
     except (OSError, ValueError, KeyError, TypeError) as exc:

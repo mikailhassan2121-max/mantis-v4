@@ -32,6 +32,13 @@ benchmark outputs are excluded from opportunity rankings and consensus.
 specialist eligible for human review; it never promotes an agent automatically.
 Promotion requires an explicit registry/code change.
 
+The first independent model is `REFERENCE_DISTANCE_SHADOW`, a fixed versioned
+heuristic using only the verified contract reference, current proxy value, and
+remaining window. It consumes neither MANTIS probabilities nor Kalshi quotes.
+Its output is uncalibrated, evidence-only, and compared after verified resolution
+against both MANTIS and the market-implied benchmark. Complementarity is reported
+as a diagnostic difference, never as proof of quality or an activation trigger.
+
 SVI now has a versioned specialist registry and correlation-aware consensus
 diagnostics. Specialists sharing a correlation group are averaged before
 independent groups are combined, preventing duplicate-model confidence

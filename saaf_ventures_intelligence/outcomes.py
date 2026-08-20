@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 
 from .events import read_events
+from .governance import SpecialistAdmissionPolicy
 from .probabilities import CalibrationObservation, evaluate_calibration
 
 
@@ -69,12 +70,20 @@ def join_verified_forecasts(evidence_path: Path, resolution_path: Path) -> tuple
         resolution = verified.get(contract_id)
         if resolution is None:
             continue
+        resolved_at = str(resolution.get("resolved_at_utc") or "")
+        try:
+            forecast_time = datetime.fromisoformat(str(timestamp).replace("Z", "+00:00"))
+            resolution_time = datetime.fromisoformat(resolved_at.replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            continue
+        if forecast_time >= resolution_time:
+            continue
         confidence = float(candidate["probability"])
         probability_yes = confidence if candidate["side"] == "YES" else 1.0 - confidence
         resolved.append(ResolvedForecast(
             contract_id, agent, policy, str(candidate.get("instrument") or "UNKNOWN"),
             str(timestamp), probability_yes, resolution["result"] == "YES",
-            str(resolution.get("resolved_at_utc") or ""),
+            resolved_at,
             str(resolution.get("settlement_source") or "UNKNOWN"),
             str(candidate.get("role") or "ADVISORY"),
         ))
@@ -94,22 +103,49 @@ def resolved_evidence_report(evidence_path: Path, resolution_path: Path, *, mini
         reports.append({"agent": agent, "policy_version": policy, **asdict(report)})
     benchmark_by_contract = {row.contract_id: row for row in resolved if row.role == "BENCHMARK"}
     comparisons = []
-    advisory_groups = defaultdict(list)
+    comparison_groups = defaultdict(list)
     for row in resolved:
-        if row.role == "ADVISORY" and row.contract_id in benchmark_by_contract:
-            advisory_groups[(row.agent, row.policy_version)].append(row)
-    for (agent, policy), rows in sorted(advisory_groups.items()):
+        if row.role in {"ADVISORY", "SHADOW"} and row.contract_id in benchmark_by_contract:
+            comparison_groups[(row.agent, row.policy_version, row.role)].append(row)
+    for (agent, policy, role), rows in sorted(comparison_groups.items()):
         agent_obs = [CalibrationObservation(row.probability_yes,row.outcome_yes,agent,policy) for row in rows]
         benchmark_obs = [CalibrationObservation(benchmark_by_contract[row.contract_id].probability_yes,
                          row.outcome_yes,benchmark_by_contract[row.contract_id].agent,
                          benchmark_by_contract[row.contract_id].policy_version) for row in rows]
         agent_report=evaluate_calibration(agent_obs,minimum_sample=minimum_sample)
         benchmark_report=evaluate_calibration(benchmark_obs,minimum_sample=minimum_sample)
-        comparisons.append({"agent":agent,"policy_version":policy,
+        comparisons.append({"agent":agent,"policy_version":policy,"role":role,
             "benchmark_agent":benchmark_by_contract[rows[0].contract_id].agent,"overlap":len(rows),
             "status":"REPORT_ONLY" if len(rows)>=minimum_sample else "INSUFFICIENT_EVIDENCE",
             "brier_improvement":benchmark_report.brier_score-agent_report.brier_score,
             "log_loss_improvement":benchmark_report.log_loss-agent_report.log_loss})
+    advisory_by_contract = {row.contract_id: row for row in resolved if row.role == "ADVISORY"}
+    complementarity = []
+    shadow_groups = defaultdict(list)
+    for row in resolved:
+        if row.role == "SHADOW" and row.contract_id in advisory_by_contract:
+            shadow_groups[(row.agent, row.policy_version)].append(row)
+    for (agent, policy), rows in sorted(shadow_groups.items()):
+        distances = [abs(row.probability_yes-advisory_by_contract[row.contract_id].probability_yes)
+                     for row in rows]
+        complementarity.append({"agent":agent,"policy_version":policy,"overlap":len(rows),
+            "mean_absolute_probability_difference":sum(distances)/len(distances),
+            "metric":"MATCHED_MEAN_ABSOLUTE_PROBABILITY_DIFFERENCE",
+            "quality_claim":False})
+    governance = []
+    admission = SpecialistAdmissionPolicy(minimum_verified=minimum_sample,
+        minimum_overlap=minimum_sample)
+    for (agent, policy), rows in sorted(shadow_groups.items()):
+        comparison = next((row for row in comparisons
+            if row["agent"] == agent and row["policy_version"] == policy), None)
+        diagnostic = next((row for row in complementarity
+            if row["agent"] == agent and row["policy_version"] == policy), None)
+        decision = admission.evaluate(agent=agent, role="SHADOW", verified_samples=len(rows),
+            benchmark_overlap=0 if comparison is None else comparison["overlap"],
+            brier_improvement=None if comparison is None else comparison["brier_improvement"],
+            log_loss_improvement=None if comparison is None else comparison["log_loss_improvement"],
+            complementarity=None if diagnostic is None else diagnostic["mean_absolute_probability_difference"])
+        governance.append(asdict(decision))
     return {
         "status": "REPORT_ONLY",
         "resolution_requirement": "OFFICIAL_VERIFIED_ONLY",
@@ -118,5 +154,8 @@ def resolved_evidence_report(evidence_path: Path, resolution_path: Path, *, mini
         "unresolved_forecasts": unresolved,
         "groups": reports,
         "benchmark_comparisons": comparisons,
+        "complementarity": complementarity,
+        "admission_governance": governance,
+        "automatic_promotion": False,
         "model_activation": False,
     }

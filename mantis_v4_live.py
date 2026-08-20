@@ -498,7 +498,8 @@ def _run_kalshi_manual_signals(root,args,cfg,ui_config,diagnostic=False):
  from mantis_v4.manual_signal.live import ManualSignalEngine,render_manual_diagnostics
  from mantis_v4.ui import CommandCenter,CommandCenterState,build_audio,build_voice
  from mantis_v4.ui.voice import phrase_experimental_manual_signal
- from saaf_ventures_intelligence.agents import KalshiMarketImpliedBenchmark,MantisAdapter
+ from saaf_ventures_intelligence.agents import (KalshiMarketImpliedBenchmark,MantisAdapter,
+  ReferenceDistanceShadow)
  from saaf_ventures_intelligence.contracts import AgentContext
  from saaf_ventures_intelligence.events import JsonlEventSink,NullEventSink
  from saaf_ventures_intelligence.operations import operational_report
@@ -521,7 +522,7 @@ def _run_kalshi_manual_signals(root,args,cfg,ui_config,diagnostic=False):
  except Exception as exc:
   svi_events=NullEventSink()
   state.log("WARNING","SVI","EVIDENCE UNAVAILABLE",f"{type(exc).__name__}: {exc}")
- svi=MarketSupervisor((MantisAdapter(),KalshiMarketImpliedBenchmark()),events=svi_events)
+ svi=MarketSupervisor((MantisAdapter(),KalshiMarketImpliedBenchmark(),ReferenceDistanceShadow()),events=svi_events)
  svi_evidence_path=signal_path/"svi"/"events.jsonl"
  svi_resolution_path=shadow_path/"resolutions.jsonl"
  svi_evidence_report={"status":"REPORT_ONLY","resolution_requirement":"OFFICIAL_VERIFIED_ONLY",

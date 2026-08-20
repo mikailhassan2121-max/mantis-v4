@@ -8,6 +8,7 @@ import unittest
 from mantis_v4.manual_signal.core import V2_POLICY, V21_POLICY, V22_POLICY
 from saaf_ventures_intelligence.agents.mantis_adapter import MantisAdapter
 from saaf_ventures_intelligence.agents.market_implied import KalshiMarketImpliedBenchmark
+from saaf_ventures_intelligence.agents.reference_distance import ReferenceDistanceShadow
 from saaf_ventures_intelligence.agents.base import SpecialistAgent
 from saaf_ventures_intelligence.contracts import AgentContext, ExecutionMode, Side, SignalCandidate
 from saaf_ventures_intelligence.registry import AgentRegistry
@@ -79,6 +80,42 @@ class SviFoundationTests(unittest.TestCase):
         self.assertFalse(KalshiMarketImpliedBenchmark().analyze(context(base)))
         inconsistent={**base,"quote_verified":True,"no_bid":".05","no_ask":".10"}
         self.assertFalse(KalshiMarketImpliedBenchmark().analyze(context(inconsistent)))
+
+    def test_reference_distance_shadow_is_independent_fail_closed_and_non_actionable(self):
+        row={"asset":"BTC-USD","contract_id":"BTC|window|15m","target":"100",
+             "proxy_current":"100.10","seconds_remaining":300,
+             "window_end_utc":"2026-08-19T12:15:00+00:00","confidence":.01,
+             "yes_bid":.99,"yes_ask":1.0}
+        candidate=ReferenceDistanceShadow().analyze(context(row))[0]
+        self.assertEqual(candidate.side,Side.YES)
+        self.assertGreater(candidate.probability,.5)
+        self.assertFalse(candidate.economically_valid)
+        self.assertFalse(candidate.attributes["uses_mantis_probability"])
+        self.assertFalse(candidate.attributes["uses_kalshi_quote"])
+        self.assertFalse(candidate.attributes["actionable"])
+        self.assertFalse(ReferenceDistanceShadow().analyze(context({**row,"target":"bad"})))
+
+    def test_reference_distance_shadow_is_excluded_but_gets_resolved_governance_evidence(self):
+        row={"asset":"BTC-USD","side":"YES","confidence":.8,"conservative_probability":.7,
+             "ask":.60,"economically_valid":True,"contract_id":"BTC|window|15m",
+             "target":"100","proxy_current":"100.10","window_end_utc":"2026-08-19T12:15:00+00:00",
+             "seconds_remaining":300,"quote_verified":True,"yes_bid":.58,"yes_ask":.62,
+             "no_bid":.38,"no_ask":.42}
+        with tempfile.TemporaryDirectory() as tmp:
+            evidence=Path(tmp)/"events.jsonl"; resolutions=Path(tmp)/"resolutions.jsonl"
+            result=MarketSupervisor((MantisAdapter(),KalshiMarketImpliedBenchmark(),
+                ReferenceDistanceShadow()),events=JsonlEventSink(evidence)).evaluate(context(row))
+            self.assertEqual([item.candidate.agent for item in result.opportunities],["MANTIS"])
+            self.assertEqual(result.consensus[0].agents,("MANTIS",))
+            self.assertEqual([item.agent for item in result.shadows],["REFERENCE_DISTANCE_SHADOW"])
+            resolutions.write_text('{"contract_id":"BTC|window|15m","result":"YES","resolution_status":"VERIFIED","resolved_at_utc":"2026-08-19T12:15:00+00:00","settlement_source":"CF_BENCHMARKS"}\n',encoding="utf-8")
+            report=resolved_evidence_report(evidence,resolutions,minimum_sample=1)
+            comparison=next(item for item in report["benchmark_comparisons"]
+                if item["agent"]=="REFERENCE_DISTANCE_SHADOW")
+            self.assertEqual((comparison["role"],comparison["overlap"]),("SHADOW",1))
+            self.assertEqual(report["complementarity"][0]["overlap"],1)
+            self.assertFalse(report["admission_governance"][0]["automatic_promotion"])
+            self.assertFalse(report["automatic_promotion"])
 
     def test_benchmark_is_excluded_from_ranking_and_consensus_but_recorded(self):
         row={"asset":"BTC-USD","side":"YES","confidence":.8,"conservative_probability":.7,
@@ -254,6 +291,19 @@ class SviFoundationTests(unittest.TestCase):
             report = resolved_evidence_report(evidence, resolutions, minimum_sample=1)
             self.assertEqual(report["groups"][0]["status"], "REPORT_ONLY")
             self.assertFalse(report["model_activation"])
+
+    def test_post_resolution_forecast_is_never_joined(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            evidence=Path(tmp)/"events.jsonl"; resolutions=Path(tmp)/"resolutions.jsonl"
+            sink=JsonlEventSink(evidence)
+            candidate={"agent":"S","policy_version":"P","contract_id":"BTC|window|15m",
+                "instrument":"BTC-USD","side":"YES","probability":.99,"role":"SHADOW",
+                "rank":None,"risk_disposition":"SHADOW_ONLY"}
+            sink.append(AuditEvent("late","SUPERVISOR_EVALUATION",
+                NOW.replace(minute=16),"run",{"execution_mode":"MANUAL_ONLY","candidates":[candidate]}))
+            resolutions.write_text('{"contract_id":"BTC|window|15m","result":"YES","resolution_status":"VERIFIED","resolved_at_utc":"2026-08-19T12:15:00+00:00","settlement_source":"CF_BENCHMARKS"}\n',encoding="utf-8")
+            joined,_=join_verified_forecasts(evidence,resolutions)
+            self.assertFalse(joined)
 
     def test_unverified_resolution_is_never_scored(self):
         with tempfile.TemporaryDirectory() as tmp:
