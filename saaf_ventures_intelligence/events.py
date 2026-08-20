@@ -70,7 +70,7 @@ def read_events(path: Path) -> list[dict]:
             if line_number == len(lines):
                 break
             raise ValueError(f"malformed {path.name} line {line_number}")
-        if not isinstance(value, dict) or value.get("schema_version") not in {1, 2, 3, 4, 5}:
+        if not isinstance(value, dict) or value.get("schema_version") not in {1, 2, 3, 4, 5, 6}:
             raise ValueError(f"unsupported {path.name} line {line_number}")
         events.append(value)
     return events

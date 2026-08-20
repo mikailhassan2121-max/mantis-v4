@@ -11,6 +11,7 @@ from saaf_ventures_intelligence.agents.market_implied import KalshiMarketImplied
 from saaf_ventures_intelligence.agents.reference_distance import ReferenceDistanceShadow
 from saaf_ventures_intelligence.agents.base import SpecialistAgent
 from saaf_ventures_intelligence.contracts import AgentContext, ExecutionMode, Side, SignalCandidate
+from saaf_ventures_intelligence.data import normalize_context
 from saaf_ventures_intelligence.registry import AgentRegistry
 from saaf_ventures_intelligence.events import JsonlEventSink
 from saaf_ventures_intelligence.events import AuditEvent, read_events
@@ -51,6 +52,30 @@ def static_candidate(agent,side,probability):
 
 
 class SviFoundationTests(unittest.TestCase):
+    def test_normalized_data_contract_is_additive_immutable_and_capability_scoped(self):
+        row={"asset":"BTC-USD","contract_id":"BTC|window|15m","target":"100",
+             "proxy_current":"100.1","seconds_remaining":300,
+             "yes_bid":.58,"yes_ask":.62,"no_bid":.38,"no_ask":.42,
+             "quote_verified":True,"quote_provenance":"KALSHI"}
+        original=dict(row)
+        batch=normalize_context(context(row))
+        self.assertEqual(row,original)
+        self.assertEqual(len(batch.observations),1)
+        observation=batch.observations[0]
+        self.assertTrue((observation.identity_valid,observation.reference_valid,observation.quote_valid))
+        self.assertFalse(batch.quality.mutates_source)
+        with self.assertRaises(TypeError): observation.provenance["quote"]="changed"
+
+    def test_normalization_rejects_invalid_identity_without_blocking_authoritative_mantis(self):
+        invalid={"asset":"BTC-USD","confidence":.7,"conservative_probability":.6,
+                 "side":"YES","seconds_remaining":None}
+        result=MarketSupervisor((MantisAdapter(),)).evaluate(context(invalid))
+        self.assertEqual(result.data_quality["normalized_rows"],0)
+        self.assertEqual(result.data_quality["rejected_rows"],1)
+        self.assertEqual(len(result.blocked),1)
+        self.assertEqual(command_center_payload(result)["data_quality"]["policy_version"],
+                         "SVI_DATA_NORMALIZATION_V1")
+
     def test_mantis_adapter_preserves_active_and_historical_policies(self):
         before = (V2_POLICY, V21_POLICY, V22_POLICY)
         row = {"asset": "BTC", "side": "YES", "confidence": .9,
@@ -388,7 +413,7 @@ class SviFoundationTests(unittest.TestCase):
             audit=audit_evidence(evidence,resolutions); manifest=evidence_manifest(evidence,resolutions)
             report=operational_report(evidence,resolutions)
             self.assertEqual(audit["status"],"PASS")
-            self.assertEqual(manifest["schema_versions"],[5])
+            self.assertEqual(manifest["schema_versions"],[6])
             self.assertEqual(manifest["agents"],["MANTIS"])
             self.assertEqual(report["audit"]["status"],"PASS")
             self.assertEqual(evidence.read_bytes(),before)

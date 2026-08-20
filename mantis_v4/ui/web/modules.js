@@ -576,9 +576,13 @@
             var comparisons=evidence.benchmark_comparisons||[];
             var governance=evidence.admission_governance||[], complementarity=evidence.complementarity||[];
             var assetComparisons=evidence.asset_comparisons||[];
+            var dataQuality=svi.data_quality||{};
             var milestones=[50,250,500,1000], resolved=Number(shadow.resolutions||0), list=[
                 {k:"SAAF VENTURES INTELLIGENCE",v:"RESOLVED EVIDENCE / READ ONLY",cls:"warnc"},
                 {k:"SVI EXECUTION MODE",v:svi.execution_mode||"MANUAL_ONLY"},
+                {k:"DATA NORMALIZATION",v:dataQuality.policy_version||"AWAITING OBSERVATION"},
+                {k:"NORMALIZED / REJECTED",v:String(dataQuality.normalized_rows||0)+" / "+String(dataQuality.rejected_rows||0)},
+                {k:"REFERENCE / QUOTE CAPABLE",v:String(dataQuality.reference_capable||0)+" / "+String(dataQuality.quote_capable||0)},
                 {k:"SPECIALIST REGISTRY",v:(registry.registry_version||"SVI_AGENT_REGISTRY_V2")+" / "+String(registry.specialist_count||0)+" AGENT(S)"},
                 {k:"RESOLUTION REQUIREMENT",v:evidence.resolution_requirement||"OFFICIAL_VERIFIED_ONLY"},
                 {k:"SVI EVIDENCE HEALTH",v:evidence.audit_status||"AWAITING AUDIT",cls:evidence.audit_status==="PASS"?"ok":"warnc"},

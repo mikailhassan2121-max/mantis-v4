@@ -28,12 +28,16 @@ def evidence_manifest(evidence_path: Path, resolution_path: Path) -> dict:
     agents = sorted({str(candidate.get("agent"))
                      for row in events for candidate in (row.get("payload") or {}).get("candidates") or ()
                      if candidate.get("agent")})
+    data_policies = sorted({str((row.get("payload") or {}).get("data_quality",{}).get("policy_version"))
+                            for row in events
+                            if (row.get("payload") or {}).get("data_quality",{}).get("policy_version")})
     return {
         "manifest_version": "SVI_EVIDENCE_MANIFEST_V1",
         "evidence_file": {"file": Path(evidence_path).name, "rows": len(events), "sha256": _hash(Path(evidence_path))},
         "resolution_file": {"file": Path(resolution_path).name, "sha256": _hash(Path(resolution_path))},
         "schema_versions": schema_versions,
         "agents": agents, "policy_versions": policies,
+        "data_policy_versions": data_policies,
         "first_timestamp": replay.first_timestamp, "last_timestamp": replay.last_timestamp,
         "evaluations": replay.evaluations, "candidates": replay.candidates,
         "execution_mode": "MANUAL_ONLY", "read_only": True,
@@ -58,13 +62,19 @@ def audit_evidence(evidence_path: Path, resolution_path: Path) -> dict:
         if previous is not None and stamp < previous:
             errors.append("NON_CHRONOLOGICAL_EVENT")
         previous = stamp
-        if row.get("schema_version") not in {1, 2, 3, 4, 5}:
+        if row.get("schema_version") not in {1, 2, 3, 4, 5, 6}:
             errors.append("UNSUPPORTED_SCHEMA_VERSION")
         if row.get("event_type") != "SUPERVISOR_EVALUATION":
             continue
         payload = row.get("payload") or {}
         if payload.get("execution_mode") != "MANUAL_ONLY":
             errors.append("EXECUTION_MODE_NOT_MANUAL")
+        if row.get("schema_version") >= 6:
+            quality = payload.get("data_quality") or {}
+            if quality.get("policy_version") != "SVI_DATA_NORMALIZATION_V1":
+                errors.append("DATA_QUALITY_POLICY_MISSING")
+            if quality.get("mutates_source") is not False:
+                errors.append("DATA_NORMALIZATION_MUST_NOT_MUTATE_SOURCE")
         registry = payload.get("registry") or {}
         if row.get("schema_version") >= 3 and registry.get("execution_mode") != "MANUAL_ONLY":
             errors.append("REGISTRY_EXECUTION_MODE_NOT_MANUAL")

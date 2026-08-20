@@ -54,6 +54,7 @@ def command_center_payload(result: SupervisorResult, evidence: dict | None = Non
         "consensus": [{**asdict(row), "side": row.side.value} for row in result.consensus],
         "benchmarks": [_benchmark(row) for row in result.benchmarks],
         "shadows": [_shadow(row) for row in result.shadows],
+        "data_quality": dict(result.data_quality),
     }
     if evidence is not None:
         payload["evidence"] = dict(evidence)

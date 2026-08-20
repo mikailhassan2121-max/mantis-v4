@@ -112,9 +112,11 @@ class SupervisorResult:
     registry_manifest: Mapping[str, Any] = field(default_factory=dict)
     benchmarks: tuple[SignalCandidate, ...] = ()
     shadows: tuple[SignalCandidate, ...] = ()
+    data_quality: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.execution_mode is not ExecutionMode.MANUAL_ONLY:
             raise ValueError("SVI Phase 1 supports manual-only execution")
         object.__setattr__(self, "agent_errors", MappingProxyType(dict(self.agent_errors)))
         object.__setattr__(self, "registry_manifest", MappingProxyType(dict(self.registry_manifest)))
+        object.__setattr__(self, "data_quality", MappingProxyType(dict(self.data_quality)))

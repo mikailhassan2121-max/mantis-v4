@@ -57,6 +57,12 @@ anonymous verified bid/ask midpoints. It is recorded and calibrated beside
 MANTIS but is excluded from opportunity ranking and consensus, providing a
 clean baseline for measuring whether MANTIS adds information beyond the market.
 
+Every supervisor run also emits an immutable `SVI_DATA_NORMALIZATION_V1`
+observation envelope. It reports identity, reference, and quote capabilities plus
+source provenance without altering the authoritative MANTIS selection dictionary.
+Invalid normalized rows fail closed for new specialists while MANTIS translation
+and historical behavior remain unchanged.
+
 **MANTIS** — Market Analysis and Neuro-Tactical Intraday Signal System.
 
 Research-grade 15-minute crypto event-contract probability, risk, and advisory engine for BTC, ETH, SOL, ADA, and XRP.

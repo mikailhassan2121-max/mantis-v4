@@ -10,6 +10,7 @@ from ..consensus import ConsensusEngine
 from ..registry import AgentRegistry
 from ..ranking import rank_opportunities
 from ..risk import RiskEngine
+from ..data import normalize_context
 
 
 class MarketSupervisor:
@@ -23,6 +24,10 @@ class MarketSupervisor:
 
     def evaluate(self, context: AgentContext) -> SupervisorResult:
         run_id = str(uuid.uuid4())
+        normalized = normalize_context(context)
+        context = AgentContext(context.observed_at, context.market, context.instrument,
+            {**dict(context.payload), "normalized_observations": normalized.observations,
+             "data_quality": normalized.quality.as_dict()})
         assessed = []
         benchmarks = []
         shadows = []
@@ -47,7 +52,8 @@ class MarketSupervisor:
                                   execution_mode=ExecutionMode.MANUAL_ONLY,
                                   opportunities=allowed, blocked=blocked, agent_errors=errors,
                                   consensus=consensus, registry_manifest=self.registry.manifest(),
-                                  benchmarks=tuple(benchmarks), shadows=tuple(shadows))
+                                  benchmarks=tuple(benchmarks), shadows=tuple(shadows),
+                                  data_quality=normalized.quality.as_dict())
         evidence = []
         for row in ranked:
             evidence.append({
@@ -100,6 +106,7 @@ class MarketSupervisor:
                                          "benchmarks": len(benchmarks),
                                          "shadows": len(shadows),
                                          "agent_errors": errors, "candidates": evidence,
+                                         "data_quality": normalized.quality.as_dict(),
                                          "registry": dict(result.registry_manifest),
                                          "consensus": [{"contract_id": row.contract_id,
                                             "instrument": row.instrument, "status": row.status,
@@ -110,5 +117,5 @@ class MarketSupervisor:
                                             "correlation_groups": list(row.correlation_groups),
                                             "policy_version": row.policy_version, "actionable": False}
                                            for row in consensus],
-                                     }))
+                                     }, schema_version=6))
         return result
