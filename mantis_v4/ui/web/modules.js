@@ -577,11 +577,13 @@
             var governance=evidence.admission_governance||[], complementarity=evidence.complementarity||[];
             var assetComparisons=evidence.asset_comparisons||[];
             var dataQuality=svi.data_quality||{};
+            var platform=svi.platform||{};
             var replay=evidence.historical_replay||{}, replayReports=replay.reports||[];
             var drift=(evidence.temporal_drift||{}).reports||[];
             var lifecycle=(evidence.lifecycle||{}).specialists||[];
             var milestones=[50,250,500,1000], resolved=Number(shadow.resolutions||0), list=[
-                {k:"SAAF VENTURES INTELLIGENCE",v:"RESOLVED EVIDENCE / READ ONLY",cls:"warnc"},
+                {k:"SAAF VENTURES INTELLIGENCE",v:"MANUAL RESEARCH PLATFORM V1 / READ ONLY",cls:"warnc"},
+                {k:"PLATFORM VERSION",v:platform.platform_version||"SVI_MANUAL_RESEARCH_PLATFORM_V1"},
                 {k:"SVI EXECUTION MODE",v:svi.execution_mode||"MANUAL_ONLY"},
                 {k:"DATA NORMALIZATION",v:dataQuality.policy_version||"AWAITING OBSERVATION"},
                 {k:"NORMALIZED / REJECTED",v:String(dataQuality.normalized_rows||0)+" / "+String(dataQuality.rejected_rows||0)},

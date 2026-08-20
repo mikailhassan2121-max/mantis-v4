@@ -26,6 +26,8 @@ from saaf_ventures_intelligence.research import temporal_drift_report
 from saaf_ventures_intelligence.supervisors import MarketSupervisor
 from saaf_ventures_intelligence.ui import command_center_payload
 from saaf_ventures_intelligence.ui import publish_to_mantis
+from saaf_ventures_intelligence.platform import platform_manifest
+from saaf_ventures_intelligence import __version__ as svi_version
 
 UTC = timezone.utc
 NOW = datetime(2026, 8, 19, 12, tzinfo=UTC)
@@ -54,6 +56,14 @@ def static_candidate(agent,side,probability):
 
 
 class SviFoundationTests(unittest.TestCase):
+    def test_completed_platform_manifest_is_manual_only_and_non_executable(self):
+        manifest=platform_manifest()
+        self.assertEqual((svi_version,manifest["package_version"]),("1.0.0","1.0.0"))
+        self.assertTrue(manifest["complete"])
+        self.assertEqual(manifest["safety"]["execution_mode"],"MANUAL_ONLY")
+        for capability in ("brokerage_authentication","order_execution","portfolio_sizing",
+                           "pnl_backtest","automatic_promotion","automatic_policy_tuning"):
+            self.assertFalse(manifest["safety"][capability])
     def test_normalized_data_contract_is_additive_immutable_and_capability_scoped(self):
         row={"asset":"BTC-USD","contract_id":"BTC|window|15m","target":"100",
              "proxy_current":"100.1","seconds_remaining":300,
@@ -446,6 +456,7 @@ class SviFoundationTests(unittest.TestCase):
             lifecycle=report["evidence"]["lifecycle"]
             self.assertEqual(lifecycle["specialists"][0]["state"],"CONFIGURED_ADVISORY")
             self.assertFalse(lifecycle["automatic_promotion"])
+            self.assertEqual(report["platform"]["platform_version"],"SVI_MANUAL_RESEARCH_PLATFORM_V1")
             self.assertEqual(evidence.read_bytes(),before)
 
     def test_legacy_v1_without_contract_identity_is_warning_not_corruption(self):
@@ -474,6 +485,7 @@ class SviFoundationTests(unittest.TestCase):
         self.assertTrue(parser.parse_args(["--svi-audit"]).svi_audit)
         self.assertTrue(parser.parse_args(["--svi-manifest"]).svi_manifest)
         self.assertTrue(parser.parse_args(["--svi-backtest"]).svi_backtest)
+        self.assertTrue(parser.parse_args(["--svi-capabilities"]).svi_capabilities)
 
 
 if __name__ == "__main__":

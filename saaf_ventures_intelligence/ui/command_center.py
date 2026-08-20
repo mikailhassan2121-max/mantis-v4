@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from ..contracts import RankedOpportunity, SupervisorResult
 from dataclasses import asdict
+from ..platform import platform_manifest
 
 
 def _row(item: RankedOpportunity) -> dict:
@@ -42,7 +43,7 @@ def _shadow(candidate) -> dict:
 def command_center_payload(result: SupervisorResult, evidence: dict | None = None) -> dict:
     payload = {
         "product": "SAAF VENTURES INTELLIGENCE",
-        "phase": "MULTI_SPECIALIST_FOUNDATION",
+        "phase": "MANUAL_RESEARCH_PLATFORM_V1",
         "execution_mode": result.execution_mode.value,
         "observation_only": True,
         "run_id": result.run_id,
@@ -55,6 +56,7 @@ def command_center_payload(result: SupervisorResult, evidence: dict | None = Non
         "benchmarks": [_benchmark(row) for row in result.benchmarks],
         "shadows": [_shadow(row) for row in result.shadows],
         "data_quality": dict(result.data_quality),
+        "platform": platform_manifest(),
     }
     if evidence is not None:
         payload["evidence"] = dict(evidence)

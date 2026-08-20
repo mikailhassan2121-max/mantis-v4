@@ -82,9 +82,13 @@ def inspect(root: Path, forward_dir: Path, environ: dict | None = None) -> list[
     results.extend(_dependency_results())
     try:
         importlib.import_module("saaf_ventures_intelligence.operations")
-        results.append(HealthResult("SVI FOUNDATION", "READY", "manual-only evidence operations", True))
+        manifest = importlib.import_module("saaf_ventures_intelligence.platform").platform_manifest()
+        safe = (manifest["complete"] is True and manifest["safety"]["execution_mode"]=="MANUAL_ONLY"
+                and manifest["safety"]["order_execution"] is False)
+        results.append(HealthResult("SVI PLATFORM", "READY" if safe else "FAILED",
+                                    manifest["platform_version"], True))
     except Exception as exc:
-        results.append(HealthResult("SVI FOUNDATION", "FAILED", f"{type(exc).__name__}: {exc}", True))
+        results.append(HealthResult("SVI PLATFORM", "FAILED", f"{type(exc).__name__}: {exc}", True))
     try:
         config = MantisConfig.load(environ=env)
         results.append(HealthResult("RUNTIME CONFIG", "READY", f"{len(config.active_assets)} assets", True))

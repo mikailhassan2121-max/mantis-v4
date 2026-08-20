@@ -1,7 +1,7 @@
 # MANTIS 4.10.0
 
-MANTIS is also the first specialist integration for the Phase 1
-`saaf_ventures_intelligence` foundation. SVI consumes MANTIS's authoritative
+MANTIS is the first advisory specialist in the completed manual-only
+`saaf_ventures_intelligence` platform. SVI consumes MANTIS's authoritative
 manual-signal output without changing its models, policy versions, memory,
 selection, persistence, or observation-only behavior. SVI adds typed advisory
 contracts, isolated specialist orchestration, append-only audit events,
@@ -21,14 +21,14 @@ agent/policy/contract, exclude proxy or mismatched resolutions, and surface
 grouped Brier, log-loss, and calibration-error evidence in the Forward view.
 
 Operational inspection is available through `--svi-report`, `--svi-audit`,
-`--svi-manifest`, and `--svi-backtest`. These commands are read-only, use the runner's scoped
+`--svi-manifest`, `--svi-backtest`, and `--svi-capabilities`. These commands are read-only, use the runner's scoped
 path protections, and report evidence hashes, schema/identity integrity,
 restart chronology, verified-resolution coverage, and manual-only status.
 
 Specialist lifecycle governance is fail-closed. New models may be registered
 with the `SHADOW` role to collect append-only resolved evidence, but shadow and
 benchmark outputs are excluded from opportunity rankings and consensus.
-`SVI_SPECIALIST_ADMISSION_V1` can only mark a sufficiently tested shadow
+The versioned specialist admission policy can only mark a sufficiently tested shadow
 specialist eligible for human review; it never promotes an agent automatically.
 Promotion requires an explicit registry/code change.
 
@@ -73,6 +73,9 @@ and historical behavior remain unchanged.
 forecasts in chronological folds and attributes probability quality by agent,
 policy, asset, and forecast side. It performs no fitting, tuning, simulated
 trading, or P&L calculation.
+
+The finalized architecture and operator procedures are documented in
+`docs/SVI_ARCHITECTURE.md` and `docs/SVI_OPERATIONS.md`.
 
 **MANTIS** — Market Analysis and Neuro-Tactical Intraday Signal System.
 

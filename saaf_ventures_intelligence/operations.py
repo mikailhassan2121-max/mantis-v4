@@ -9,6 +9,7 @@ from .outcomes import resolved_evidence_report
 from .replay import EvidenceReplay
 from .research import historical_replay_report
 from .lifecycle import specialist_lifecycle_report
+from .platform import platform_manifest
 
 FORBIDDEN_FIELDS = frozenset({
     "order_id", "brokerage_account", "portfolio_size", "position_size",
@@ -136,5 +137,6 @@ def operational_report(evidence_path: Path, resolution_path: Path) -> dict:
         "manifest": evidence_manifest(evidence_path, resolution_path),
         "replay": EvidenceReplay(evidence_path).summary().__dict__,
         "evidence": evidence,
+        "platform": platform_manifest(),
         "manual_only": True, "read_only": True,
     }

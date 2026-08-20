@@ -3,4 +3,4 @@
 from .contracts import ExecutionMode, SignalCandidate, SupervisorResult
 
 __all__ = ["ExecutionMode", "SignalCandidate", "SupervisorResult"]
-__version__ = "0.1.0"
+__version__ = "1.0.0"

@@ -1,4 +1,4 @@
-"""Calibration interfaces; Phase 1 ships an explicit identity scaffold only."""
+"""Calibration reporting interfaces; live probabilities remain unchanged."""
 from __future__ import annotations
 
 from dataclasses import dataclass
