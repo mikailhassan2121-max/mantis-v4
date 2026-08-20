@@ -17,11 +17,12 @@ from saaf_ventures_intelligence.events import JsonlEventSink
 from saaf_ventures_intelligence.events import AuditEvent, read_events
 from saaf_ventures_intelligence.governance import SpecialistAdmissionPolicy
 from saaf_ventures_intelligence.probabilities import CalibrationObservation, evaluate_calibration
-from saaf_ventures_intelligence.outcomes import join_verified_forecasts, resolved_evidence_report
+from saaf_ventures_intelligence.outcomes import ResolvedForecast, join_verified_forecasts, resolved_evidence_report
 from saaf_ventures_intelligence.operations import audit_evidence, evidence_manifest, operational_report
 from saaf_ventures_intelligence.replay import EvidenceReplay
 from saaf_ventures_intelligence.risk import RiskEngine
 from saaf_ventures_intelligence.research import historical_replay_report
+from saaf_ventures_intelligence.research import temporal_drift_report
 from saaf_ventures_intelligence.supervisors import MarketSupervisor
 from saaf_ventures_intelligence.ui import command_center_payload
 from saaf_ventures_intelligence.ui import publish_to_mantis
@@ -223,7 +224,7 @@ class SviFoundationTests(unittest.TestCase):
             complementarity=.2,brier_improvement_lower_bound=.005,
             log_loss_improvement_lower_bound=.002,recent_brier_improvement=.01,
             asset_coverage=3,assets_meeting_minimum=3,
-            worst_asset_brier_lower_bound=.001)
+            worst_asset_brier_lower_bound=.001,drift_status="PASS")
         self.assertEqual(decision.status,"ELIGIBLE_FOR_HUMAN_REVIEW")
         self.assertFalse(decision.automatic_promotion)
         blocked=policy.evaluate(agent="S",role="SHADOW",verified_samples=2,
@@ -239,12 +240,13 @@ class SviFoundationTests(unittest.TestCase):
             complementarity=.2,brier_improvement_lower_bound=-.01,
             log_loss_improvement_lower_bound=None,recent_brier_improvement=-.02,
             asset_coverage=1,assets_meeting_minimum=1,
-            worst_asset_brier_lower_bound=-.01)
+            worst_asset_brier_lower_bound=-.01,drift_status="ALERT")
         self.assertEqual(decision.status,"NOT_ELIGIBLE")
         self.assertIn("BRIER_IMPROVEMENT_NOT_STATISTICALLY_ESTABLISHED",decision.reasons)
         self.assertIn("RECENT_PERIOD_STABILITY_NOT_ESTABLISHED",decision.reasons)
         self.assertIn("INSUFFICIENT_ASSET_COVERAGE",decision.reasons)
         self.assertIn("CROSS_ASSET_ROBUSTNESS_NOT_ESTABLISHED",decision.reasons)
+        self.assertIn("TEMPORAL_STABILITY_NOT_ESTABLISHED",decision.reasons)
 
     def test_resolved_report_requires_repeated_cross_asset_robustness(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -274,6 +276,9 @@ class SviFoundationTests(unittest.TestCase):
             decision=report["admission_governance"][0]
             self.assertEqual(decision["status"],"ELIGIBLE_FOR_HUMAN_REVIEW")
             self.assertFalse(decision["automatic_promotion"])
+            drift=next(row for row in report["temporal_drift"]["reports"] if row["agent"]=="S")
+            self.assertEqual(drift["status"],"PASS")
+            self.assertFalse(report["temporal_drift"]["automatic_action"])
 
             replay=historical_replay_report(evidence,resolutions,fold_count=3)
             shadow_report=next(row for row in replay["reports"] if row["agent"]=="S")
@@ -283,6 +288,18 @@ class SviFoundationTests(unittest.TestCase):
             self.assertFalse(replay["simulated_trading"])
             self.assertFalse(replay["pnl_calculated"])
             self.assertEqual(len([row for row in replay["attribution"] if row["agent"]=="S"]),3)
+
+    def test_temporal_drift_alerts_on_recent_probability_deterioration(self):
+        rows=[]
+        for index in range(12):
+            probability=.90 if index<6 else .10
+            rows.append(ResolvedForecast(str(index),"S","P","BTC-USD",
+                f"2026-08-19T11:{index:02d}:00+00:00",probability,True,
+                f"2026-08-19T12:{index:02d}:00+00:00","VERIFIED","SHADOW"))
+        report=temporal_drift_report(rows,minimum_sample=12)
+        self.assertEqual(report["reports"][0]["status"],"ALERT")
+        self.assertGreater(report["reports"][0]["brier_deterioration"],.05)
+        self.assertFalse(report["automatic_action"])
 
     def test_consensus_counts_correlation_groups_not_duplicate_agents(self):
         agents=(StaticAgent("A","CORRELATED",static_candidate("A",Side.YES,.9)),
@@ -426,6 +443,9 @@ class SviFoundationTests(unittest.TestCase):
             self.assertEqual(manifest["schema_versions"],[6])
             self.assertEqual(manifest["agents"],["MANTIS"])
             self.assertEqual(report["audit"]["status"],"PASS")
+            lifecycle=report["evidence"]["lifecycle"]
+            self.assertEqual(lifecycle["specialists"][0]["state"],"CONFIGURED_ADVISORY")
+            self.assertFalse(lifecycle["automatic_promotion"])
             self.assertEqual(evidence.read_bytes(),before)
 
     def test_legacy_v1_without_contract_identity_is_warning_not_corruption(self):

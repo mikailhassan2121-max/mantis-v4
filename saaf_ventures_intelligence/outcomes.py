@@ -11,6 +11,7 @@ import math
 from .events import read_events
 from .governance import SpecialistAdmissionPolicy
 from .probabilities import CalibrationObservation, evaluate_calibration
+from .research.drift import temporal_drift_report
 
 
 def _log_loss(probability: float, outcome: bool) -> float:
@@ -107,6 +108,7 @@ def join_verified_forecasts(evidence_path: Path, resolution_path: Path) -> tuple
 
 def resolved_evidence_report(evidence_path: Path, resolution_path: Path, *, minimum_sample: int = 30) -> dict:
     resolved, unresolved = join_verified_forecasts(evidence_path, resolution_path)
+    drift = temporal_drift_report(resolved,minimum_sample=minimum_sample)
     groups = defaultdict(list)
     for row in resolved:
         groups[(row.agent, row.policy_version)].append(
@@ -188,6 +190,8 @@ def resolved_evidence_report(evidence_path: Path, resolution_path: Path, *, mini
             if row["agent"] == agent and row["policy_version"] == policy), None)
         diagnostic = next((row for row in complementarity
             if row["agent"] == agent and row["policy_version"] == policy), None)
+        stability = next((row for row in drift["reports"]
+            if row["agent"] == agent and row["policy_version"] == policy), None)
         decision = admission.evaluate(agent=agent, role="SHADOW", verified_samples=len(rows),
             benchmark_overlap=0 if comparison is None else comparison["overlap"],
             brier_improvement=None if comparison is None else comparison["brier_improvement"],
@@ -198,7 +202,8 @@ def resolved_evidence_report(evidence_path: Path, resolution_path: Path, *, mini
             recent_brier_improvement=None if comparison is None else comparison["recent_half_brier_improvement"],
             asset_coverage=0 if comparison is None else comparison["asset_coverage"],
             assets_meeting_minimum=0 if comparison is None else comparison["assets_meeting_minimum"],
-            worst_asset_brier_lower_bound=None if comparison is None else comparison["worst_asset_brier_lower_95"])
+            worst_asset_brier_lower_bound=None if comparison is None else comparison["worst_asset_brier_lower_95"],
+            drift_status="UNKNOWN" if stability is None else stability["status"])
         governance.append(asdict(decision))
     return {
         "status": "REPORT_ONLY",
@@ -209,6 +214,7 @@ def resolved_evidence_report(evidence_path: Path, resolution_path: Path, *, mini
         "groups": reports,
         "benchmark_comparisons": comparisons,
         "asset_comparisons": asset_comparisons,
+        "temporal_drift": drift,
         "complementarity": complementarity,
         "admission_governance": governance,
         "automatic_promotion": False,

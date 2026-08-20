@@ -44,6 +44,12 @@ coverage. Point-estimate wins alone cannot qualify a specialist for human review
 Admission policy V3 also requires enough observations within at least three
 individual assets and a positive worst-asset Brier lower bound. Broad-looking
 aggregate results therefore cannot hide a concentrated or failing asset slice.
+Admission policy V4 adds `SVI_TEMPORAL_DRIFT_V1`: early-versus-recent Brier
+deterioration and probability-distribution shifts must remain within fixed limits.
+Unknown or alerted drift blocks review eligibility but triggers no automatic action.
+`SVI_SPECIALIST_LIFECYCLE_V1` records configured roles, admission state, and role
+history from the append-only ledger. Promotion and demotion are both disabled;
+any lifecycle transition requires an explicit reviewed configuration change.
 
 SVI now has a versioned specialist registry and correlation-aware consensus
 diagnostics. Specialists sharing a correlation group are averaged before

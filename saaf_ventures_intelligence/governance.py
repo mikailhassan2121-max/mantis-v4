@@ -16,7 +16,7 @@ class AdmissionDecision:
 class SpecialistAdmissionPolicy:
     """Evaluates evidence; it never mutates the registry or promotes an agent."""
 
-    version = "SVI_SPECIALIST_ADMISSION_V3"
+    version = "SVI_SPECIALIST_ADMISSION_V4"
 
     def __init__(self, *, minimum_verified: int = 100, minimum_overlap: int = 50,
                  minimum_complementarity: float = 0.10, minimum_assets: int = 3):
@@ -33,7 +33,8 @@ class SpecialistAdmissionPolicy:
                  log_loss_improvement_lower_bound: float | None = None,
                  recent_brier_improvement: float | None = None,
                  asset_coverage: int = 0, assets_meeting_minimum: int = 0,
-                 worst_asset_brier_lower_bound: float | None = None) -> AdmissionDecision:
+                 worst_asset_brier_lower_bound: float | None = None,
+                 drift_status: str = "UNKNOWN") -> AdmissionDecision:
         reasons = []
         if str(role).upper() != "SHADOW":
             reasons.append("SPECIALIST_NOT_IN_SHADOW_ROLE")
@@ -57,6 +58,8 @@ class SpecialistAdmissionPolicy:
             reasons.append("INSUFFICIENT_PER_ASSET_SAMPLE_COVERAGE")
         if worst_asset_brier_lower_bound is None or worst_asset_brier_lower_bound <= 0:
             reasons.append("CROSS_ASSET_ROBUSTNESS_NOT_ESTABLISHED")
+        if drift_status != "PASS":
+            reasons.append("TEMPORAL_STABILITY_NOT_ESTABLISHED")
         if complementarity is None or complementarity < self.minimum_complementarity:
             reasons.append("COMPLEMENTARITY_NOT_ESTABLISHED")
         status = "ELIGIBLE_FOR_HUMAN_REVIEW" if not reasons else "NOT_ELIGIBLE"

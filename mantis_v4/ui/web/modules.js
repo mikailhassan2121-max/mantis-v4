@@ -578,6 +578,8 @@
             var assetComparisons=evidence.asset_comparisons||[];
             var dataQuality=svi.data_quality||{};
             var replay=evidence.historical_replay||{}, replayReports=replay.reports||[];
+            var drift=(evidence.temporal_drift||{}).reports||[];
+            var lifecycle=(evidence.lifecycle||{}).specialists||[];
             var milestones=[50,250,500,1000], resolved=Number(shadow.resolutions||0), list=[
                 {k:"SAAF VENTURES INTELLIGENCE",v:"RESOLVED EVIDENCE / READ ONLY",cls:"warnc"},
                 {k:"SVI EXECUTION MODE",v:svi.execution_mode||"MANUAL_ONLY"},
@@ -633,6 +635,17 @@
                 list.push({k:"WORST / BEST FOLD BRIER",sub:true,v:F.num(r.worst_fold_brier,4)+" / "+F.num(r.best_fold_brier,4)});
             });
             if(replayReports.length) list.push(null);
+            drift.forEach(function(d){
+                list.push({k:"DRIFT "+(d.agent||"AGENT"),v:d.status||"INSUFFICIENT EVIDENCE",cls:d.status==="PASS"?"ok":"warnc"});
+                list.push({k:"EARLY / RECENT BRIER",sub:true,v:F.num(d.early_brier,4)+" / "+F.num(d.recent_brier,4)});
+                list.push({k:"DETERIORATION / P SHIFT",sub:true,v:F.num(d.brier_deterioration,4)+" / "+F.num(d.mean_probability_shift,4)});
+            });
+            if(drift.length) list.push(null);
+            lifecycle.forEach(function(s){
+                list.push({k:"LIFECYCLE "+(s.name||"SPECIALIST"),v:(s.role||"UNKNOWN")+" / "+(s.state||"UNKNOWN"),cls:s.role==="ADVISORY"?"ok":"warnc"});
+                list.push({k:"AUTOMATIC TRANSITION",sub:true,v:"DISABLED"});
+            });
+            if(lifecycle.length) list.push(null);
             complementarity.forEach(function(c){
                 list.push({k:"COMPLEMENTARITY "+(c.agent||"SHADOW"),v:"MATCHED DIFFERENCE / n="+String(c.overlap||0),cls:"warnc"});
                 list.push({k:"MEAN ABSOLUTE P DIFFERENCE",sub:true,v:F.num(c.mean_absolute_probability_difference,4)});
