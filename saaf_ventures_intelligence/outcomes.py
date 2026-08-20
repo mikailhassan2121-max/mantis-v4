@@ -117,6 +117,7 @@ def resolved_evidence_report(evidence_path: Path, resolution_path: Path, *, mini
         reports.append({"agent": agent, "policy_version": policy, **asdict(report)})
     benchmark_by_contract = {row.contract_id: row for row in resolved if row.role == "BENCHMARK"}
     comparisons = []
+    asset_comparisons = []
     comparison_groups = defaultdict(list)
     for row in resolved:
         if row.role in {"ADVISORY", "SHADOW"} and row.contract_id in benchmark_by_contract:
@@ -132,6 +133,27 @@ def resolved_evidence_report(evidence_path: Path, resolution_path: Path, *, mini
         log_improvement,log_lower=_mean_lower_95(log_deltas)
         recent_start=len(brier_deltas)//2
         recent_brier=sum(brier_deltas[recent_start:])/len(brier_deltas[recent_start:])
+        minimum_asset_sample=max(1,minimum_sample//4)
+        scorecards=[]
+        for instrument in sorted({row.instrument for row in rows}):
+            asset_rows=[row for row in rows if row.instrument==instrument]
+            asset_brier=[]; asset_log=[]
+            for row in asset_rows:
+                benchmark=benchmark_by_contract[row.contract_id]; outcome=float(row.outcome_yes)
+                asset_brier.append((benchmark.probability_yes-outcome)**2-(row.probability_yes-outcome)**2)
+                asset_log.append(_log_loss(benchmark.probability_yes,row.outcome_yes)-
+                                 _log_loss(row.probability_yes,row.outcome_yes))
+            asset_brier_mean,asset_brier_lower=_mean_lower_95(asset_brier)
+            asset_log_mean,asset_log_lower=_mean_lower_95(asset_log)
+            card={"agent":agent,"policy_version":policy,"role":role,"instrument":instrument,
+                "sample_size":len(asset_rows),"minimum_sample":minimum_asset_sample,
+                "sample_qualified":len(asset_rows)>=minimum_asset_sample,
+                "brier_improvement":asset_brier_mean,"brier_improvement_lower_95":asset_brier_lower,
+                "log_loss_improvement":asset_log_mean,"log_loss_improvement_lower_95":asset_log_lower}
+            scorecards.append(card); asset_comparisons.append(card)
+        qualified=[card for card in scorecards if card["sample_qualified"]]
+        qualified_lowers=[card["brier_improvement_lower_95"] for card in qualified
+                          if card["brier_improvement_lower_95"] is not None]
         comparisons.append({"agent":agent,"policy_version":policy,"role":role,
             "benchmark_agent":benchmark_by_contract[rows[0].contract_id].agent,"overlap":len(rows),
             "status":"REPORT_ONLY" if len(rows)>=minimum_sample else "INSUFFICIENT_EVIDENCE",
@@ -141,6 +163,9 @@ def resolved_evidence_report(evidence_path: Path, resolution_path: Path, *, mini
             "log_loss_improvement_lower_95":log_lower,
             "recent_half_brier_improvement":recent_brier,
             "asset_coverage":len({row.instrument for row in rows}),
+            "minimum_per_asset_sample":minimum_asset_sample,
+            "assets_meeting_minimum":len(qualified),
+            "worst_asset_brier_lower_95":min(qualified_lowers) if len(qualified_lowers)==len(qualified) and qualified else None,
             "uncertainty_method":"PAIRED_NORMAL_APPROXIMATION_95"})
     advisory_by_contract = {row.contract_id: row for row in resolved if row.role == "ADVISORY"}
     complementarity = []
@@ -171,7 +196,9 @@ def resolved_evidence_report(evidence_path: Path, resolution_path: Path, *, mini
             brier_improvement_lower_bound=None if comparison is None else comparison["brier_improvement_lower_95"],
             log_loss_improvement_lower_bound=None if comparison is None else comparison["log_loss_improvement_lower_95"],
             recent_brier_improvement=None if comparison is None else comparison["recent_half_brier_improvement"],
-            asset_coverage=0 if comparison is None else comparison["asset_coverage"])
+            asset_coverage=0 if comparison is None else comparison["asset_coverage"],
+            assets_meeting_minimum=0 if comparison is None else comparison["assets_meeting_minimum"],
+            worst_asset_brier_lower_bound=None if comparison is None else comparison["worst_asset_brier_lower_95"])
         governance.append(asdict(decision))
     return {
         "status": "REPORT_ONLY",
@@ -181,6 +208,7 @@ def resolved_evidence_report(evidence_path: Path, resolution_path: Path, *, mini
         "unresolved_forecasts": unresolved,
         "groups": reports,
         "benchmark_comparisons": comparisons,
+        "asset_comparisons": asset_comparisons,
         "complementarity": complementarity,
         "admission_governance": governance,
         "automatic_promotion": False,

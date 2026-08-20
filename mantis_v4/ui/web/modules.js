@@ -575,6 +575,7 @@
             var benchmarks=svi.benchmarks||[], shadows=svi.shadows||[];
             var comparisons=evidence.benchmark_comparisons||[];
             var governance=evidence.admission_governance||[], complementarity=evidence.complementarity||[];
+            var assetComparisons=evidence.asset_comparisons||[];
             var milestones=[50,250,500,1000], resolved=Number(shadow.resolutions||0), list=[
                 {k:"SAAF VENTURES INTELLIGENCE",v:"RESOLVED EVIDENCE / READ ONLY",cls:"warnc"},
                 {k:"SVI EXECUTION MODE",v:svi.execution_mode||"MANUAL_ONLY"},
@@ -613,8 +614,14 @@
                 list.push({k:"BRIER / LOG-LOSS IMPROVEMENT",sub:true,v:F.num(c.brier_improvement,4)+" / "+F.num(c.log_loss_improvement,4)});
                 list.push({k:"LOWER 95% BOUNDS",sub:true,v:F.num(c.brier_improvement_lower_95,4)+" / "+F.num(c.log_loss_improvement_lower_95,4)});
                 list.push({k:"RECENT BRIER / ASSET COVERAGE",sub:true,v:F.num(c.recent_half_brier_improvement,4)+" / "+String(c.asset_coverage||0)});
+                list.push({k:"QUALIFIED ASSETS / WORST LOWER 95%",sub:true,v:String(c.assets_meeting_minimum||0)+" / "+F.num(c.worst_asset_brier_lower_95,4)});
             });
             if(comparisons.length) list.push(null);
+            assetComparisons.forEach(function(a){
+                list.push({k:"ASSET "+String(a.instrument||"UNKNOWN").replace("-USD",""),v:(a.agent||"AGENT")+" / n="+String(a.sample_size||0),cls:a.sample_qualified?"":"warnc"});
+                list.push({k:"BRIER / LOWER 95%",sub:true,v:F.num(a.brier_improvement,4)+" / "+F.num(a.brier_improvement_lower_95,4)});
+            });
+            if(assetComparisons.length) list.push(null);
             complementarity.forEach(function(c){
                 list.push({k:"COMPLEMENTARITY "+(c.agent||"SHADOW"),v:"MATCHED DIFFERENCE / n="+String(c.overlap||0),cls:"warnc"});
                 list.push({k:"MEAN ABSOLUTE P DIFFERENCE",sub:true,v:F.num(c.mean_absolute_probability_difference,4)});

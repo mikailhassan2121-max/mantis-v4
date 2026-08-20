@@ -41,6 +41,9 @@ as a diagnostic difference, never as proof of quality or an activation trigger.
 Admission policy V2 additionally requires positive paired 95% lower confidence
 bounds against the market, positive recent-half Brier improvement, and multi-asset
 coverage. Point-estimate wins alone cannot qualify a specialist for human review.
+Admission policy V3 also requires enough observations within at least three
+individual assets and a positive worst-asset Brier lower bound. Broad-looking
+aggregate results therefore cannot hide a concentrated or failing asset slice.
 
 SVI now has a versioned specialist registry and correlation-aware consensus
 diagnostics. Specialists sharing a correlation group are averaged before

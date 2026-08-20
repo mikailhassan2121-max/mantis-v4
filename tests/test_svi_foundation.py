@@ -114,6 +114,8 @@ class SviFoundationTests(unittest.TestCase):
                 if item["agent"]=="REFERENCE_DISTANCE_SHADOW")
             self.assertEqual((comparison["role"],comparison["overlap"]),("SHADOW",1))
             self.assertIsNone(comparison["brier_improvement_lower_95"])
+            self.assertEqual(report["asset_comparisons"][0]["instrument"],"BTC-USD")
+            self.assertTrue(report["asset_comparisons"][0]["sample_qualified"])
             self.assertEqual(report["complementarity"][0]["overlap"],1)
             self.assertIn("BRIER_IMPROVEMENT_NOT_STATISTICALLY_ESTABLISHED",
                           report["admission_governance"][0]["reasons"])
@@ -194,7 +196,8 @@ class SviFoundationTests(unittest.TestCase):
             benchmark_overlap=8,brier_improvement=.02,log_loss_improvement=.01,
             complementarity=.2,brier_improvement_lower_bound=.005,
             log_loss_improvement_lower_bound=.002,recent_brier_improvement=.01,
-            asset_coverage=3)
+            asset_coverage=3,assets_meeting_minimum=3,
+            worst_asset_brier_lower_bound=.001)
         self.assertEqual(decision.status,"ELIGIBLE_FOR_HUMAN_REVIEW")
         self.assertFalse(decision.automatic_promotion)
         blocked=policy.evaluate(agent="S",role="SHADOW",verified_samples=2,
@@ -209,11 +212,42 @@ class SviFoundationTests(unittest.TestCase):
             benchmark_overlap=10,brier_improvement=.05,log_loss_improvement=.04,
             complementarity=.2,brier_improvement_lower_bound=-.01,
             log_loss_improvement_lower_bound=None,recent_brier_improvement=-.02,
-            asset_coverage=1)
+            asset_coverage=1,assets_meeting_minimum=1,
+            worst_asset_brier_lower_bound=-.01)
         self.assertEqual(decision.status,"NOT_ELIGIBLE")
         self.assertIn("BRIER_IMPROVEMENT_NOT_STATISTICALLY_ESTABLISHED",decision.reasons)
         self.assertIn("RECENT_PERIOD_STABILITY_NOT_ESTABLISHED",decision.reasons)
         self.assertIn("INSUFFICIENT_ASSET_COVERAGE",decision.reasons)
+        self.assertIn("CROSS_ASSET_ROBUSTNESS_NOT_ESTABLISHED",decision.reasons)
+
+    def test_resolved_report_requires_repeated_cross_asset_robustness(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            evidence=Path(tmp)/"events.jsonl"; resolutions=Path(tmp)/"resolutions.jsonl"
+            candidates=[]; resolution_rows=[]
+            for asset in ("BTC-USD","ETH-USD","SOL-USD"):
+                for index in range(2):
+                    contract=f"{asset}|window|{index}"
+                    common={"contract_id":contract,"instrument":asset,"side":"YES"}
+                    candidates.extend((
+                        {**common,"agent":"MANTIS","policy_version":"M","probability":.75,
+                         "role":"ADVISORY","rank":1,"risk_disposition":"ALLOW_REVIEW"},
+                        {**common,"agent":"KALSHI_MARKET_IMPLIED","policy_version":"B","probability":.60,
+                         "role":"BENCHMARK","rank":None,"risk_disposition":"BENCHMARK_ONLY"},
+                        {**common,"agent":"S","policy_version":"S1","probability":.95,
+                         "role":"SHADOW","rank":None,"risk_disposition":"SHADOW_ONLY"}))
+                    resolution_rows.append('{"contract_id":"'+contract+'","result":"YES",'
+                        '"resolution_status":"VERIFIED","resolved_at_utc":"2026-08-19T12:15:00+00:00",'
+                        '"settlement_source":"CF_BENCHMARKS"}')
+            JsonlEventSink(evidence).append(AuditEvent("multi","SUPERVISOR_EVALUATION",NOW,"run",
+                {"execution_mode":"MANUAL_ONLY","candidates":candidates}))
+            resolutions.write_text("\n".join(resolution_rows)+"\n",encoding="utf-8")
+            report=resolved_evidence_report(evidence,resolutions,minimum_sample=6)
+            comparison=next(row for row in report["benchmark_comparisons"] if row["agent"]=="S")
+            self.assertEqual((comparison["asset_coverage"],comparison["assets_meeting_minimum"]),(3,3))
+            self.assertGreater(comparison["worst_asset_brier_lower_95"],0)
+            decision=report["admission_governance"][0]
+            self.assertEqual(decision["status"],"ELIGIBLE_FOR_HUMAN_REVIEW")
+            self.assertFalse(decision["automatic_promotion"])
 
     def test_consensus_counts_correlation_groups_not_duplicate_agents(self):
         agents=(StaticAgent("A","CORRELATED",static_candidate("A",Side.YES,.9)),
