@@ -611,6 +611,8 @@
             comparisons.forEach(function(c){
                 list.push({k:"MODEL VS MARKET "+(c.agent||"AGENT"),v:(c.status||"INSUFFICIENT_EVIDENCE")+" / n="+String(c.overlap||0),cls:"warnc"});
                 list.push({k:"BRIER / LOG-LOSS IMPROVEMENT",sub:true,v:F.num(c.brier_improvement,4)+" / "+F.num(c.log_loss_improvement,4)});
+                list.push({k:"LOWER 95% BOUNDS",sub:true,v:F.num(c.brier_improvement_lower_95,4)+" / "+F.num(c.log_loss_improvement_lower_95,4)});
+                list.push({k:"RECENT BRIER / ASSET COVERAGE",sub:true,v:F.num(c.recent_half_brier_improvement,4)+" / "+String(c.asset_coverage||0)});
             });
             if(comparisons.length) list.push(null);
             complementarity.forEach(function(c){

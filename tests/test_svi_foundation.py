@@ -113,7 +113,10 @@ class SviFoundationTests(unittest.TestCase):
             comparison=next(item for item in report["benchmark_comparisons"]
                 if item["agent"]=="REFERENCE_DISTANCE_SHADOW")
             self.assertEqual((comparison["role"],comparison["overlap"]),("SHADOW",1))
+            self.assertIsNone(comparison["brier_improvement_lower_95"])
             self.assertEqual(report["complementarity"][0]["overlap"],1)
+            self.assertIn("BRIER_IMPROVEMENT_NOT_STATISTICALLY_ESTABLISHED",
+                          report["admission_governance"][0]["reasons"])
             self.assertFalse(report["admission_governance"][0]["automatic_promotion"])
             self.assertFalse(report["automatic_promotion"])
 
@@ -189,7 +192,9 @@ class SviFoundationTests(unittest.TestCase):
         policy=SpecialistAdmissionPolicy(minimum_verified=10,minimum_overlap=5)
         decision=policy.evaluate(agent="S",role="SHADOW",verified_samples=12,
             benchmark_overlap=8,brier_improvement=.02,log_loss_improvement=.01,
-            complementarity=.2)
+            complementarity=.2,brier_improvement_lower_bound=.005,
+            log_loss_improvement_lower_bound=.002,recent_brier_improvement=.01,
+            asset_coverage=3)
         self.assertEqual(decision.status,"ELIGIBLE_FOR_HUMAN_REVIEW")
         self.assertFalse(decision.automatic_promotion)
         blocked=policy.evaluate(agent="S",role="SHADOW",verified_samples=2,
@@ -197,6 +202,18 @@ class SviFoundationTests(unittest.TestCase):
             complementarity=None)
         self.assertEqual(blocked.status,"NOT_ELIGIBLE")
         self.assertIn("INSUFFICIENT_VERIFIED_OUTCOMES",blocked.reasons)
+
+    def test_admission_v2_rejects_point_win_without_uncertainty_stability_and_coverage(self):
+        policy=SpecialistAdmissionPolicy(minimum_verified=2,minimum_overlap=2)
+        decision=policy.evaluate(agent="S",role="SHADOW",verified_samples=10,
+            benchmark_overlap=10,brier_improvement=.05,log_loss_improvement=.04,
+            complementarity=.2,brier_improvement_lower_bound=-.01,
+            log_loss_improvement_lower_bound=None,recent_brier_improvement=-.02,
+            asset_coverage=1)
+        self.assertEqual(decision.status,"NOT_ELIGIBLE")
+        self.assertIn("BRIER_IMPROVEMENT_NOT_STATISTICALLY_ESTABLISHED",decision.reasons)
+        self.assertIn("RECENT_PERIOD_STABILITY_NOT_ESTABLISHED",decision.reasons)
+        self.assertIn("INSUFFICIENT_ASSET_COVERAGE",decision.reasons)
 
     def test_consensus_counts_correlation_groups_not_duplicate_agents(self):
         agents=(StaticAgent("A","CORRELATED",static_candidate("A",Side.YES,.9)),

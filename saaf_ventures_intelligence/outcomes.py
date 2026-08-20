@@ -6,10 +6,24 @@ from dataclasses import asdict, dataclass
 from datetime import datetime
 import json
 from pathlib import Path
+import math
 
 from .events import read_events
 from .governance import SpecialistAdmissionPolicy
 from .probabilities import CalibrationObservation, evaluate_calibration
+
+
+def _log_loss(probability: float, outcome: bool) -> float:
+    value = max(1e-15, min(1.0 - 1e-15, probability))
+    return -(float(outcome) * math.log(value) + (1.0-float(outcome)) * math.log(1.0-value))
+
+
+def _mean_lower_95(values: list[float]) -> tuple[float, float | None]:
+    mean = sum(values) / len(values)
+    if len(values) < 2:
+        return mean, None
+    variance = sum((value-mean)**2 for value in values) / (len(values)-1)
+    return mean, mean - 1.96 * math.sqrt(variance / len(values))
 
 
 @dataclass(frozen=True)
@@ -108,17 +122,26 @@ def resolved_evidence_report(evidence_path: Path, resolution_path: Path, *, mini
         if row.role in {"ADVISORY", "SHADOW"} and row.contract_id in benchmark_by_contract:
             comparison_groups[(row.agent, row.policy_version, row.role)].append(row)
     for (agent, policy, role), rows in sorted(comparison_groups.items()):
-        agent_obs = [CalibrationObservation(row.probability_yes,row.outcome_yes,agent,policy) for row in rows]
-        benchmark_obs = [CalibrationObservation(benchmark_by_contract[row.contract_id].probability_yes,
-                         row.outcome_yes,benchmark_by_contract[row.contract_id].agent,
-                         benchmark_by_contract[row.contract_id].policy_version) for row in rows]
-        agent_report=evaluate_calibration(agent_obs,minimum_sample=minimum_sample)
-        benchmark_report=evaluate_calibration(benchmark_obs,minimum_sample=minimum_sample)
+        brier_deltas=[]; log_deltas=[]
+        for row in rows:
+            benchmark=benchmark_by_contract[row.contract_id]; outcome=float(row.outcome_yes)
+            brier_deltas.append((benchmark.probability_yes-outcome)**2-(row.probability_yes-outcome)**2)
+            log_deltas.append(_log_loss(benchmark.probability_yes,row.outcome_yes)-
+                              _log_loss(row.probability_yes,row.outcome_yes))
+        brier_improvement,brier_lower=_mean_lower_95(brier_deltas)
+        log_improvement,log_lower=_mean_lower_95(log_deltas)
+        recent_start=len(brier_deltas)//2
+        recent_brier=sum(brier_deltas[recent_start:])/len(brier_deltas[recent_start:])
         comparisons.append({"agent":agent,"policy_version":policy,"role":role,
             "benchmark_agent":benchmark_by_contract[rows[0].contract_id].agent,"overlap":len(rows),
             "status":"REPORT_ONLY" if len(rows)>=minimum_sample else "INSUFFICIENT_EVIDENCE",
-            "brier_improvement":benchmark_report.brier_score-agent_report.brier_score,
-            "log_loss_improvement":benchmark_report.log_loss-agent_report.log_loss})
+            "brier_improvement":brier_improvement,
+            "brier_improvement_lower_95":brier_lower,
+            "log_loss_improvement":log_improvement,
+            "log_loss_improvement_lower_95":log_lower,
+            "recent_half_brier_improvement":recent_brier,
+            "asset_coverage":len({row.instrument for row in rows}),
+            "uncertainty_method":"PAIRED_NORMAL_APPROXIMATION_95"})
     advisory_by_contract = {row.contract_id: row for row in resolved if row.role == "ADVISORY"}
     complementarity = []
     shadow_groups = defaultdict(list)
@@ -144,7 +167,11 @@ def resolved_evidence_report(evidence_path: Path, resolution_path: Path, *, mini
             benchmark_overlap=0 if comparison is None else comparison["overlap"],
             brier_improvement=None if comparison is None else comparison["brier_improvement"],
             log_loss_improvement=None if comparison is None else comparison["log_loss_improvement"],
-            complementarity=None if diagnostic is None else diagnostic["mean_absolute_probability_difference"])
+            complementarity=None if diagnostic is None else diagnostic["mean_absolute_probability_difference"],
+            brier_improvement_lower_bound=None if comparison is None else comparison["brier_improvement_lower_95"],
+            log_loss_improvement_lower_bound=None if comparison is None else comparison["log_loss_improvement_lower_95"],
+            recent_brier_improvement=None if comparison is None else comparison["recent_half_brier_improvement"],
+            asset_coverage=0 if comparison is None else comparison["asset_coverage"])
         governance.append(asdict(decision))
     return {
         "status": "REPORT_ONLY",

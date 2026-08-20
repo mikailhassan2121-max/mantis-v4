@@ -38,6 +38,9 @@ remaining window. It consumes neither MANTIS probabilities nor Kalshi quotes.
 Its output is uncalibrated, evidence-only, and compared after verified resolution
 against both MANTIS and the market-implied benchmark. Complementarity is reported
 as a diagnostic difference, never as proof of quality or an activation trigger.
+Admission policy V2 additionally requires positive paired 95% lower confidence
+bounds against the market, positive recent-half Brier improvement, and multi-asset
+coverage. Point-estimate wins alone cannot qualify a specialist for human review.
 
 SVI now has a versioned specialist registry and correlation-aware consensus
 diagnostics. Specialists sharing a correlation group are averaged before
