@@ -7,6 +7,7 @@ from pathlib import Path
 from .events import read_events
 from .outcomes import resolved_evidence_report
 from .replay import EvidenceReplay
+from .research import historical_replay_report
 
 FORBIDDEN_FIELDS = frozenset({
     "order_id", "brokerage_account", "portfolio_size", "position_size",
@@ -125,11 +126,13 @@ def audit_evidence(evidence_path: Path, resolution_path: Path) -> dict:
 
 
 def operational_report(evidence_path: Path, resolution_path: Path) -> dict:
+    evidence = resolved_evidence_report(evidence_path, resolution_path)
+    evidence["historical_replay"] = historical_replay_report(evidence_path, resolution_path)
     return {
         "report_version": "SVI_OPERATIONAL_REPORT_V1",
         "audit": audit_evidence(evidence_path, resolution_path),
         "manifest": evidence_manifest(evidence_path, resolution_path),
         "replay": EvidenceReplay(evidence_path).summary().__dict__,
-        "evidence": resolved_evidence_report(evidence_path, resolution_path),
+        "evidence": evidence,
         "manual_only": True, "read_only": True,
     }

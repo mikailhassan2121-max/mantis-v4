@@ -102,6 +102,7 @@ def build_parser():
  modes.add_argument("--svi-report",action="store_true",help="print the read-only SVI operational evidence report")
  modes.add_argument("--svi-audit",action="store_true",help="audit SVI evidence identity and integrity")
  modes.add_argument("--svi-manifest",action="store_true",help="print SVI evidence counts, schemas and hashes")
+ modes.add_argument("--svi-backtest",action="store_true",help="print deterministic read-only SVI historical scoring")
  modes.add_argument("--audit-contract",metavar="CONTRACT_ID",help="print one contract's immutable timeline")
  modes.add_argument("--incorrect-report",action="store_true",help="print incorrect entry-time classifications and exit")
  return ap
@@ -252,12 +253,14 @@ def main():
   if args.kalshi_forward_report:
    print(json.dumps(shadow_report(ShadowStore(shadow_path)),indent=2,sort_keys=True)); return 0
   result=audit_store(ShadowStore(shadow_path)); print(render_audit(result)); return 0 if result["status"]=="PASS" else 1
- if args.svi_report or args.svi_audit or args.svi_manifest:
+ if args.svi_report or args.svi_audit or args.svi_manifest or args.svi_backtest:
   from saaf_ventures_intelligence.operations import audit_evidence,evidence_manifest,operational_report
+  from saaf_ventures_intelligence.research import historical_replay_report
   shadow_path=_scoped_path(root,args.kalshi_shadow_dir,"Kalshi shadow directory")
   signal_path=_scoped_path(root,args.kalshi_manual_signal_dir,"Kalshi manual signal directory")
   evidence_path=signal_path/"svi"/"events.jsonl"; resolution_path=shadow_path/"resolutions.jsonl"
   if args.svi_report: value=operational_report(evidence_path,resolution_path)
+  elif args.svi_backtest: value=historical_replay_report(evidence_path,resolution_path)
   elif args.svi_manifest: value=evidence_manifest(evidence_path,resolution_path)
   else: value=audit_evidence(evidence_path,resolution_path)
   print(json.dumps(value,indent=2,sort_keys=True)); return 0 if value.get("status",value.get("audit",{}).get("status","PASS"))=="PASS" else 1

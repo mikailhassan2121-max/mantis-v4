@@ -21,6 +21,7 @@ from saaf_ventures_intelligence.outcomes import join_verified_forecasts, resolve
 from saaf_ventures_intelligence.operations import audit_evidence, evidence_manifest, operational_report
 from saaf_ventures_intelligence.replay import EvidenceReplay
 from saaf_ventures_intelligence.risk import RiskEngine
+from saaf_ventures_intelligence.research import historical_replay_report
 from saaf_ventures_intelligence.supervisors import MarketSupervisor
 from saaf_ventures_intelligence.ui import command_center_payload
 from saaf_ventures_intelligence.ui import publish_to_mantis
@@ -274,6 +275,15 @@ class SviFoundationTests(unittest.TestCase):
             self.assertEqual(decision["status"],"ELIGIBLE_FOR_HUMAN_REVIEW")
             self.assertFalse(decision["automatic_promotion"])
 
+            replay=historical_replay_report(evidence,resolutions,fold_count=3)
+            shadow_report=next(row for row in replay["reports"] if row["agent"]=="S")
+            self.assertEqual((shadow_report["sample_size"],len(shadow_report["folds"])),(6,3))
+            self.assertFalse(shadow_report["fitted"])
+            self.assertFalse(shadow_report["actionable"])
+            self.assertFalse(replay["simulated_trading"])
+            self.assertFalse(replay["pnl_calculated"])
+            self.assertEqual(len([row for row in replay["attribution"] if row["agent"]=="S"]),3)
+
     def test_consensus_counts_correlation_groups_not_duplicate_agents(self):
         agents=(StaticAgent("A","CORRELATED",static_candidate("A",Side.YES,.9)),
                 StaticAgent("B","CORRELATED",static_candidate("B",Side.YES,.7)),
@@ -443,6 +453,7 @@ class SviFoundationTests(unittest.TestCase):
         self.assertTrue(parser.parse_args(["--svi-report"]).svi_report)
         self.assertTrue(parser.parse_args(["--svi-audit"]).svi_audit)
         self.assertTrue(parser.parse_args(["--svi-manifest"]).svi_manifest)
+        self.assertTrue(parser.parse_args(["--svi-backtest"]).svi_backtest)
 
 
 if __name__ == "__main__":

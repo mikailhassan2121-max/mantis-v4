@@ -21,7 +21,7 @@ agent/policy/contract, exclude proxy or mismatched resolutions, and surface
 grouped Brier, log-loss, and calibration-error evidence in the Forward view.
 
 Operational inspection is available through `--svi-report`, `--svi-audit`,
-and `--svi-manifest`. These commands are read-only, use the runner's scoped
+`--svi-manifest`, and `--svi-backtest`. These commands are read-only, use the runner's scoped
 path protections, and report evidence hashes, schema/identity integrity,
 restart chronology, verified-resolution coverage, and manual-only status.
 
@@ -62,6 +62,11 @@ observation envelope. It reports identity, reference, and quote capabilities plu
 source provenance without altering the authoritative MANTIS selection dictionary.
 Invalid normalized rows fail closed for new specialists while MANTIS translation
 and historical behavior remain unchanged.
+
+`SVI_HISTORICAL_REPLAY_V1` deterministically scores immutable pre-resolution
+forecasts in chronological folds and attributes probability quality by agent,
+policy, asset, and forecast side. It performs no fitting, tuning, simulated
+trading, or P&L calculation.
 
 **MANTIS** — Market Analysis and Neuro-Tactical Intraday Signal System.
 
